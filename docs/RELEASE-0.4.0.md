@@ -2,6 +2,10 @@ OBS 用の**ローカル・リアルタイム日本語→中国語字幕**です
 
 対象は日本語の**雑談**と**ゲーム実況**。**歌枠・歌詞は対象外**です。
 
+> **0.4.0 のポイント**：UI を全面的に日本語化し、辞書を **292 フレーズ / 155 用語**に拡充しました。
+> 0.3.x から移行する場合は、旧フォルダの `config.toml` と `glossary\` を新しいフォルダへコピーすれば
+> 設定と追加した辞書を引き継げます。
+
 ---
 
 ## ダウンロード
@@ -28,7 +32,7 @@ OBS 用の**ローカル・リアルタイム日本語→中国語字幕**です
 ```
 字幕ページ ：http://127.0.0.1:8765/overlay
 設定ページ ：http://127.0.0.1:8765/admin
-デバッグ   ：http://127.0.0.1:8765/overlay?debug=1
+デバッグ　 ：http://127.0.0.1:8765/overlay?debug=1
 ```
 
 ---
@@ -151,4 +155,10 @@ OBS 用の**ローカル・リアルタイム日本語→中国語字幕**です
 [開発状況（中国語）](https://github.com/zgrg29/live_subtitle/blob/main/docs/PROGRESS.md) ·
 [OBS 設定](https://github.com/zgrg29/live_subtitle/blob/main/docs/obs-setup.md)
 
-**SHA256**：`LiveSub-0.4.0-win64.zip.sha256.txt` を参照してください。
+**SHA256**（`LiveSub-0.4.0-win64.zip`）：
+
+```
+7C4D30D870F92BC8A9E605AC4BA08788661F2C6655152D7F87EB1FCB5A53B3A6
+```
+
+チェックサムは同梱の `LiveSub-0.4.0-win64.zip.sha256.txt` でも確認できます。
