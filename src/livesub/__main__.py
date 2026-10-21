@@ -152,6 +152,7 @@ def _print_banner(cfg: Config, status: PipelineStatus) -> None:
     print(f"  {APP_NAME} {__version__}")
     print(line)
     print(f"  字幕页   {base}/overlay")
+    print(f"  设置页   {base}/admin            ← 调字体/颜色/背景，加词典")
     print(f"  调试页   {base}/overlay?debug=1     （显示延迟和连接状态）")
     print(f"  预排版   {base}/overlay?preview=1   （不推流也能调字体）")
     print(f"  麦克风   {status.source}")

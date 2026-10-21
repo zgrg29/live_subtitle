@@ -201,6 +201,82 @@ def _apply(obj: Any, data: dict[str, Any]) -> None:
             setattr(obj, f.name, value)
 
 
+def asdict_overlay(cfg: Config) -> dict[str, Any]:
+    """把 overlay 段转成可以 JSON 化的 dict（给设置面板用）。"""
+    return {f.name: getattr(cfg.overlay, f.name) for f in fields(cfg.overlay)}
+
+
+def apply_overlay(cfg: Config, values: dict[str, Any]) -> dict[str, Any]:
+    """把面板提交的值应用到内存里的配置，并做一遍类型/范围校验。"""
+    for f in fields(cfg.overlay):
+        if f.name in values:
+            setattr(cfg.overlay, f.name, values[f.name])
+    _validate(cfg)
+    return asdict_overlay(cfg)
+
+
+def save_section(path: Path | str, section: str, values: dict[str, Any]) -> Path:
+    """把一批值写回 config.toml 的某个 section，**保留原有注释和顺序**。
+
+    为什么不用 `to_toml()` 整份重写：用户手写的注释和排版会被抹掉，
+    而这些注释正是这个项目的主要文档。所以这里只替换/追加键值行。
+    """
+    p = resolve_config_path(path)
+    if not p.exists():
+        cfg = Config()
+        target = getattr(cfg, section, None)
+        if target is not None:
+            _apply(target, values)
+        p.write_text(to_toml(cfg), encoding="utf-8")
+        return p
+
+    lines = p.read_text(encoding="utf-8-sig").splitlines()
+    header = f"[{section}]"
+    start: int | None = None
+    end = len(lines)
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if start is None and stripped == header:
+                start = i
+            elif start is not None:
+                end = i
+                break
+
+    rendered = {k: f"{k} = {_toml_value(v)}" for k, v in values.items()}
+    if start is None:
+        lines += ["", header, *rendered.values()]
+    else:
+        body = lines[start + 1 : end]
+        pending = dict(rendered)
+        for i, line in enumerate(body):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            key = stripped.split("=", 1)[0].strip()
+            if key in pending:
+                body[i] = pending.pop(key)
+        if pending:
+            # 追加在 section 末尾的最后一个非空行之后，避免插到空行中间
+            insert_at = len(body)
+            while insert_at > 0 and not body[insert_at - 1].strip():
+                insert_at -= 1
+            body[insert_at:insert_at] = list(pending.values())
+        lines[start + 1 : end] = body
+
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return p
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value) if isinstance(value, float) else str(value)
+    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{text}"'
+
+
 def load(path: Path | str = CONFIG_FILENAME) -> Config:
     """读取配置；文件不存在时生成默认配置并返回。
 

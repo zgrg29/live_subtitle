@@ -36,12 +36,20 @@ class NormalizeTest(unittest.TestCase):
     def test_fullwidth_alnum(self):
         self.assertEqual(normalize("ＰＳ５"), "PS5")
 
+    def test_strip_prolonged_mark(self):
+        # 口语里寒暄几乎都带拖音，不削就永远匹配不上整句表
+        self.assertEqual(normalize("こんばんはー"), "こんばんは")
+        self.assertEqual(normalize("おつかれ〜"), "おつかれ")
+        # 词中间的「ー」不能动
+        self.assertEqual(normalize("コーヒー"), "コーヒ")
+
 
 class PhraseTest(unittest.TestCase):
     def test_hit_ignores_punctuation(self):
         g = Glossary(phrases={"こんばんは": "晚上好"})
         self.assertEqual(g.phrase("こんばんは。"), "晚上好")
         self.assertEqual(g.phrase("こんばんは！"), "晚上好")
+        self.assertEqual(g.phrase("こんばんはー"), "晚上好")  # 拖音
 
     def test_miss_when_not_exact(self):
         g = Glossary(phrases={"こんばんは": "晚上好"})
@@ -101,6 +109,16 @@ class LoadTest(unittest.TestCase):
         g = load_glossary("glossary")
         self.assertTrue(len(g) > 0)
         self.assertEqual(g.phrase("こんばんは。"), "晚上好")
+
+    def test_builtin_files_are_healthy(self):
+        """守卫：mock 接口测试曾经把 phrases.tsv 覆盖成空表，提交前必须拦住。"""
+        g = load_glossary("glossary")
+        self.assertGreaterEqual(len(g.phrases), 120, "固定表达少于 120 条，可能被写坏了")
+        self.assertGreaterEqual(len(g.terms), 80, "术语少于 80 条，可能被写坏了")
+        for term in g.terms:
+            self.assertTrue(term.ja and term.zh, f"词条缺字段：{term}")
+            if term.mode == "post":
+                self.assertTrue(term.wrong, f"post 词条没有错误写法：{term.ja}")
 
 
 class CleanTest(unittest.TestCase):

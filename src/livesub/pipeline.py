@@ -156,6 +156,23 @@ class Pipeline:
         if self._thread is not None:
             self._thread.join(timeout)
 
+    # ---------- 设置面板用 ----------
+
+    @property
+    def mt(self) -> Any:
+        """翻译引擎（设置面板的"试译"要用）。"""
+        return self._mt
+
+    def reload_glossary(self) -> bool:
+        """重新读词典并热替换。返回是否真的换上了。"""
+        reload_fn = getattr(self._mt, "reload", None)
+        if not callable(reload_fn):
+            return False
+        from .text.glossary import load_glossary
+
+        reload_fn(load_glossary(self._cfg.glossary.dir))
+        return True
+
     # ---------- 主循环 ----------
 
     def run(self) -> None:

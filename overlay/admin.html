@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiveSub 设置</title>
+<style>
+  :root {
+    --bg: #14181d; --fg: #e6edf3; --muted: #8b98a5; --line: #26303a;
+    --accent: #4c8dff; --ok: #3fb950; --warn: #d29922; --danger: #f85149;
+    --panel: #1a2027; --input: #0f1418;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 18px;
+           border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  .tabs { display: flex; gap: 6px; }
+  .tabs button { background: transparent; color: var(--muted); border: 1px solid transparent;
+                 padding: 6px 14px; border-radius: 7px; cursor: pointer; font-size: 14px; }
+  .tabs button.on { color: var(--fg); background: var(--panel); border-color: var(--line); }
+  main { display: flex; gap: 18px; padding: 18px; align-items: flex-start; }
+  .hidden { display: none !important; }
+
+  /* 预览 */
+  .preview-box { position: relative; width: 640px; flex: none; }
+  .preview-frame { position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden;
+                   background: #0a0d10 repeating-conic-gradient(#161b21 0% 25%, #0f1418 0% 50%) 50% / 24px 24px;
+                   border: 1px solid var(--line); border-radius: 10px; }
+  .preview-frame iframe { position: absolute; top: 0; left: 0; width: 1920px; height: 1080px;
+                          border: 0; transform-origin: top left; }
+  .preview-note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+  /* 表单 */
+  .form { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+          gap: 12px 18px; background: var(--panel); border: 1px solid var(--line);
+          border-radius: 12px; padding: 16px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .field input[type=text], .field input[type=number], .field select {
+    background: var(--input); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 7px; padding: 7px 9px; font: inherit; width: 100%; }
+  .field input[type=color] { width: 100%; height: 34px; background: var(--input);
+    border: 1px solid var(--line); border-radius: 7px; padding: 2px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row input[type=range] { flex: 1; accent-color: var(--accent); }
+  .row output { width: 46px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  button.primary, button.ghost { border-radius: 8px; padding: 8px 16px; font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border: 0; }
+  button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { font-size: 12px; color: var(--muted); }
+  .status.ok { color: var(--ok); } .status.err { color: var(--danger); }
+
+  /* 词典 */
+  #panel-glossary { display: block; width: 100%; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+  .card h2 { font-size: 14px; margin: 0 0 4px; }
+  .card .hint { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 4px; text-align: left; vertical-align: middle; }
+  th { font-size: 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); }
+  td input, td select { background: var(--input); color: var(--fg); border: 1px solid var(--line);
+                        border-radius: 6px; padding: 5px 7px; font: inherit; width: 100%; }
+  td.del { width: 34px; }
+  td.del button { background: transparent; border: 1px solid var(--line); color: var(--danger);
+                  border-radius: 6px; width: 28px; height: 28px; cursor: pointer; }
+  .toolbar { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .try { display: flex; gap: 8px; margin-top: 10px; }
+  .try input { flex: 1; background: var(--input); color: var(--fg); border: 1px solid var(--line);
+               border-radius: 7px; padding: 7px 9px; font: inherit; }
+  .try-out { margin-top: 8px; font-size: 13px; color: var(--muted); min-height: 22px; }
+  .try-out b { color: var(--fg); font-weight: 600; }
+  .warn { color: var(--warn); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>LiveSub 设置</h1>
+  <div class="tabs">
+    <button id="tab-style" class="on" data-panel="panel-style">样式</button>
+    <button id="tab-glossary" data-panel="panel-glossary">词典</button>
+  </div>
+  <div class="spacer"></div>
+  <span class="status" id="top-status"></span>
+  <button class="ghost" onclick="window.open('/overlay?preview=1','_blank')">打开字幕页</button>
+</header>
+
+<main>
+  <!-- ================= 样式 ================= -->
+  <section id="panel-style" style="display:contents">
+    <div class="preview-box">
+      <div class="preview-frame" id="frame-box">
+        <iframe id="pv" src="/overlay?preview=1"></iframe>
+      </div>
+      <div class="preview-note">预览是 1920×1080 等比缩放；OBS 里按 1920×1080 添加即可。</div>
+    </div>
+
+    <div class="form">
+      <div class="field" style="grid-column: 1 / -1">
+        <label>字体（系统里已安装的字体名，可写多个用逗号分隔）</label>
+        <input type="text" id="font_family">
+      </div>
+
+      <div class="field">
+        <label>中文字号</label>
+        <div class="row"><input type="range" id="zh_size" min="12" max="140" step="1"><output id="zh_size_o"></output></div>
+      </div>
+      <div class="field">
+        <label>日文字号</label>
+        <div class="row"><input type="range" id="ja_size" min="10" max="120" step="1"><output id="ja_size_o"></output></div>
+      </div>
+
+      <div class="field">
+        <label>中文字色</label>
+        <input type="color" id="zh_color">
+      </div>
+      <div class="field">
+        <label>日文字色</label>
+        <input type="color" id="ja_color">
+      </div>
+
+      <div class="field">
+        <label>描边</label>
+        <div class="check"><input type="checkbox" id="outline_on"><span>启用描边</span></div>
+        <div class="row" style="margin-top:6px">
+          <input type="color" id="outline_color" style="width:52px;flex:none">
+          <input type="range" id="outline_width" min="0" max="12" step="1">
+          <output id="outline_width_o"></output>
+        </div>
+      </div>
+      <div class="field">
+        <label>背景板（半透明长方形）</label>
+        <div class="check"><input type="checkbox" id="bg_on"><span>启用背景</span></div>
+        <div class="row" style="margin-top:6px">
+          <input type="color" id="bg_color" style="width:52px;flex:none">
+          <input type="range" id="bg_alpha" min="0" max="100" step="1">
+          <output id="bg_alpha_o"></output>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>位置</label>
+        <select id="position"><option value="bottom">底部</option><option value="top">顶部</option></select>
+      </div>
+      <div class="field">
+        <label>距边缘（%）</label>
+        <div class="row"><input type="range" id="margin_percent" min="0" max="45" step="1"><output id="margin_percent_o"></output></div>
+      </div>
+      <div class="field">
+        <label>同时显示几行</label>
+        <div class="row"><input type="range" id="max_lines" min="1" max="6" step="1"><output id="max_lines_o"></output></div>
+      </div>
+      <div class="field">
+        <label>是否显示日语原文</label>
+        <div class="check"><input type="checkbox" id="bilingual"><span>显示日文</span></div>
+      </div>
+
+      <div class="field" style="grid-column: 1 / -1">
+        <div class="actions">
+          <button class="primary" id="save-style">保存并应用</button>
+          <button class="ghost" id="reset-style">重新载入</button>
+          <span class="status" id="style-status"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 词典 ================= -->
+  <section id="panel-glossary" class="hidden">
+    <div class="card">
+      <h2>固定表达（整句）</h2>
+      <p class="hint">整句完全匹配才生效（忽略标点、空格、结尾拖音）。适合寒暄、直播套话。</p>
+      <table>
+        <thead><tr><th style="width:34%">日文</th><th style="width:30%">中文</th><th>说明</th><th></th></tr></thead>
+        <tbody id="phrases-body"></tbody>
+      </table>
+      <div class="toolbar">
+        <button class="ghost" id="add-phrase">+ 加一条</button>
+        <span class="status" id="phrase-count"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>术语</h2>
+      <p class="hint">
+        <b>pre</b>：译前把日文词换成中文再送模型（片假名专名、游戏名、食物名）。<br>
+        <b>post</b>：正常翻译，译后把「错误写法」换成正确词（只在这句里出现该词时生效）；错误写法多个用 <code>|</code> 分隔。
+      </p>
+      <table>
+        <thead><tr><th style="width:26%">日文</th><th style="width:22%">中文</th><th style="width:11%">模式</th><th style="width:22%">错误写法</th><th>说明</th><th></th></tr></thead>
+        <tbody id="terms-body"></tbody>
+      </table>
+      <div class="toolbar">
+        <button class="ghost" id="add-term">+ 加一条</button>
+        <span class="status" id="term-count"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>试译</h2>
+      <p class="hint">用当前词典翻一句，验证刚加的词有没有生效。</p>
+      <div class="try">
+        <input id="try-in" placeholder="例：こんばんはー、今日も配信やっていきます。">
+        <button class="primary" id="try-btn">翻一下</button>
+      </div>
+      <div class="try-out" id="try-out"></div>
+    </div>
+
+    <div class="toolbar">
+      <button class="primary" id="save-glossary">保存词典并热加载</button>
+      <button class="ghost" id="reload-glossary">放弃修改，重新载入</button>
+      <span class="status" id="glossary-status"></span>
+    </div>
+    <p class="warn" id="glossary-warn"></p>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const state = { cfg: null, phrases: [], terms: [] };
+
+  async function api(url, opts) {
+    const res = await fetch(url, opts);
+    let data = {};
+    try { data = await res.json(); } catch (e) {}
+    if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+    return data;
+  }
+
+  function setStatus(el, text, ok) {
+    el.textContent = text;
+    el.className = "status" + (ok === true ? " ok" : ok === false ? " err" : "");
+  }
+
+  /* ---------------- 标签页 ---------------- */
+  document.querySelectorAll(".tabs button").forEach((btn) => {
+    btn.onclick = () => {
+      document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b === btn));
+      $("panel-style").classList.toggle("hidden", btn.dataset.panel !== "panel-style");
+      $("panel-glossary").classList.toggle("hidden", btn.dataset.panel !== "panel-glossary");
+      if (btn.dataset.panel === "panel-glossary" && !state.phrases.length) loadGlossary();
+    };
+  });
+
+  /* ---------------- 预览缩放 ---------------- */
+  function fitPreview() {
+    const box = $("frame-box");
+    const scale = box.clientWidth / 1920;
+    $("pv").style.transform = "scale(" + scale + ")";
+  }
+  window.addEventListener("resize", fitPreview);
+
+  /* ---------------- 颜色/背景 ---------------- */
+  function parseBg(str) {
+    if (!str || str === "transparent" || str === "none") return { on: false, color: "#000000", alpha: 0.35 };
+    const m = /rgba?\(([^)]+)\)/.exec(str);
+    if (m) {
+      const p = m[1].split(",").map((s) => s.trim());
+      const hex = "#" + p.slice(0, 3).map((n) => Math.round(+n).toString(16).padStart(2, "0")).join("");
+      return { on: true, color: hex, alpha: p.length > 3 ? parseFloat(p[3]) : 1 };
+    }
+    if (str[0] === "#") return { on: true, color: str, alpha: 1 };
+    return { on: false, color: "#000000", alpha: 0.35 };
+  }
+  function buildBg() {
+    if (!$("bg_on").checked) return "transparent";
+    const c = $("bg_color").value;
+    const a = (+$("bg_alpha").value / 100).toFixed(2);
+    return "rgba(" + parseInt(c.slice(1, 3), 16) + "," + parseInt(c.slice(3, 5), 16) + "," +
+           parseInt(c.slice(5, 7), 16) + "," + a + ")";
+  }
+
+  /* ---------------- 表单 → 配置 ---------------- */
+  function collect() {
+    const cfg = Object.assign({}, state.cfg || {});
+    cfg.font_family = $("font_family").value;
+    cfg.zh_size = +$("zh_size").value;
+    cfg.ja_size = +$("ja_size").value;
+    cfg.zh_color = $("zh_color").value;
+    cfg.ja_color = $("ja_color").value;
+    cfg.outline_color = $("outline_color").value;
+    cfg.outline_width = $("outline_on").checked ? +$("outline_width").value : 0;
+    cfg.background = buildBg();
+    cfg.position = $("position").value;
+    cfg.margin_percent = +$("margin_percent").value;
+    cfg.max_lines = +$("max_lines").value;
+    cfg.bilingual = $("bilingual").checked;
+    return cfg;
+  }
+
+  function fill(cfg) {
+    state.cfg = cfg;
+    $("font_family").value = cfg.font_family || "";
+    $("zh_size").value = cfg.zh_size; $("zh_size_o").textContent = cfg.zh_size + "px";
+    $("ja_size").value = cfg.ja_size; $("ja_size_o").textContent = cfg.ja_size + "px";
+    $("zh_color").value = toHex(cfg.zh_color, "#ffffff");
+    $("ja_color").value = toHex(cfg.ja_color, "#b9c6d4");
+    $("outline_color").value = toHex(cfg.outline_color, "#000000");
+    $("outline_on").checked = (cfg.outline_width || 0) > 0;
+    $("outline_width").value = cfg.outline_width; $("outline_width_o").textContent = cfg.outline_width + "px";
+    const bg = parseBg(cfg.background);
+    $("bg_on").checked = bg.on;
+    $("bg_color").value = bg.color;
+    $("bg_alpha").value = Math.round(bg.alpha * 100); $("bg_alpha_o").textContent = Math.round(bg.alpha * 100) + "%";
+    $("position").value = cfg.position || "bottom";
+    $("margin_percent").value = cfg.margin_percent; $("margin_percent_o").textContent = cfg.margin_percent + "%";
+    $("max_lines").value = cfg.max_lines; $("max_lines_o").textContent = cfg.max_lines;
+    $("bilingual").checked = !!cfg.bilingual;
+  }
+
+  function toHex(v, fallback) {
+    if (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v)) return v;
+    return fallback;
+  }
+
+  function pushPreview() {
+    const frame = $("pv");
+    if (!frame.contentWindow) return;
+    frame.contentWindow.postMessage({ type: "preview-config", config: collect() }, location.origin);
+  }
+
+  // 任何输入变化都即时预览
+  document.querySelectorAll("#panel-style input, #panel-style select").forEach((el) => {
+    el.addEventListener("input", () => {
+      ["zh_size", "ja_size", "outline_width", "margin_percent", "max_lines"].forEach((k) => {
+        const out = $(k + "_o");
+        if (out) out.textContent = $(k).value + (k === "margin_percent" ? "%" : k === "max_lines" ? "" : "px");
+      });
+      $("bg_alpha_o").textContent = $("bg_alpha").value + "%";
+      pushPreview();
+    });
+  });
+
+  /* ---------------- 加载/保存样式 ---------------- */
+  async function loadConfig() {
+    try {
+      fill(await api("/api/config"));
+      pushPreview();
+      setStatus($("style-status"), "");
+    } catch (e) {
+      setStatus($("style-status"), "读取配置失败：" + e.message, false);
+    }
+  }
+
+  $("save-style").onclick = async () => {
+    const btn = $("save-style");
+    btn.disabled = true;
+    try {
+      const res = await api("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(collect()),
+      });
+      fill(res.config);
+      pushPreview();
+      setStatus($("style-status"), "已保存，OBS 里的字幕会立刻更新", true);
+    } catch (e) {
+      setStatus($("style-status"), "保存失败：" + e.message, false);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  $("reset-style").onclick = () => loadConfig();
+
+  /* ---------------- 词典 ---------------- */
+  function rowInput(value, placeholder, onInput, width) {
+    const input = document.createElement("input");
+    input.value = value || "";
+    input.placeholder = placeholder || "";
+    input.addEventListener("input", () => onInput(input.value));
+    if (width) input.style.width = width;
+    return input;
+  }
+
+  function renderPhrases() {
+    const body = $("phrases-body");
+    body.innerHTML = "";
+    state.phrases.forEach((row, i) => {
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td");
+      td1.appendChild(rowInput(row.ja, "こんばんは", (v) => (row.ja = v)));
+      const td2 = document.createElement("td");
+      td2.appendChild(rowInput(row.zh, "晚上好", (v) => (row.zh = v)));
+      const td3 = document.createElement("td");
+      td3.appendChild(rowInput(row.note, "说明（可空）", (v) => (row.note = v)));
+      const td4 = document.createElement("td");
+      td4.className = "del";
+      const del = document.createElement("button");
+      del.textContent = "×";
+      del.title = "删除这一行";
+      del.onclick = () => { state.phrases.splice(i, 1); renderPhrases(); };
+      td4.appendChild(del);
+      tr.append(td1, td2, td3, td4);
+      body.appendChild(tr);
+    });
+    $("phrase-count").textContent = state.phrases.length + " 条";
+  }
+
+  function renderTerms() {
+    const body = $("terms-body");
+    body.innerHTML = "";
+    state.terms.forEach((row, i) => {
+      const tr = document.createElement("tr");
+      const tdJa = document.createElement("td");
+      tdJa.appendChild(rowInput(row.ja, "配信", (v) => (row.ja = v)));
+      const tdZh = document.createElement("td");
+      tdZh.appendChild(rowInput(row.zh, "直播", (v) => (row.zh = v)));
+
+      const tdMode = document.createElement("td");
+      const sel = document.createElement("select");
+      [["pre", "pre"], ["post", "post"]].forEach(([v, label]) => {
+        const o = document.createElement("option");
+        o.value = v; o.textContent = label;
+        if ((row.mode || "pre") === v) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.onchange = () => (row.mode = sel.value);
+      tdMode.appendChild(sel);
+
+      const tdWrong = document.createElement("td");
+      tdWrong.appendChild(rowInput(row.wrong, "仅 post：发送|发货", (v) => (row.wrong = v)));
+
+      const tdNote = document.createElement("td");
+      tdNote.appendChild(rowInput(row.note, "说明（可空）", (v) => (row.note = v)));
+
+      const tdDel = document.createElement("td");
+      tdDel.className = "del";
+      const del = document.createElement("button");
+      del.textContent = "×";
+      del.title = "删除这一行";
+      del.onclick = () => { state.terms.splice(i, 1); renderTerms(); };
+      tdDel.appendChild(del);
+
+      tr.append(tdJa, tdZh, tdMode, tdWrong, tdNote, tdDel);
+      body.appendChild(tr);
+    });
+    $("term-count").textContent = state.terms.length + " 条";
+  }
+
+  async function loadGlossary() {
+    try {
+      const data = await api("/api/glossary");
+      state.phrases = data.phrases || [];
+      state.terms = data.terms || [];
+      renderPhrases(); renderTerms();
+      setStatus($("glossary-status"), "");
+      $("glossary-warn").textContent = "";
+    } catch (e) {
+      setStatus($("glossary-status"), "读取词典失败：" + e.message, false);
+    }
+  }
+
+  $("add-phrase").onclick = () => {
+    state.phrases.unshift({ ja: "", zh: "", note: "" });
+    renderPhrases();
+    const first = $("phrases-body").querySelector("input");
+    if (first) first.focus();
+  };
+  $("add-term").onclick = () => {
+    state.terms.unshift({ ja: "", zh: "", mode: "pre", wrong: "", note: "" });
+    renderTerms();
+    const first = $("terms-body").querySelector("input");
+    if (first) first.focus();
+  };
+
+  $("save-glossary").onclick = async () => {
+    const btn = $("save-glossary");
+    btn.disabled = true;
+    try {
+      const res = await api("/api/glossary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phrases: state.phrases, terms: state.terms }),
+      });
+      state.phrases = res.phrases || [];
+      state.terms = res.terms || [];
+      renderPhrases(); renderTerms();
+      setStatus($("glossary-status"), "已保存并热加载（" + state.phrases.length + " 句 / " + state.terms.length + " 词）", true);
+      $("glossary-warn").textContent = "写入位置：" + (res.written || []).join("，");
+    } catch (e) {
+      setStatus($("glossary-status"), "保存失败：" + e.message, false);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  $("reload-glossary").onclick = () => loadGlossary();
+
+  $("try-btn").onclick = async () => {
+    const ja = $("try-in").value.trim();
+    if (!ja) return;
+    const t0 = performance.now();
+    try {
+      const res = await api("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ja }),
+      });
+      const ms = Math.round(performance.now() - t0);
+      $("try-out").innerHTML = "<b>" + escapeHtml(res.zh || "（空）") + "</b>　" + ms + " ms";
+    } catch (e) {
+      $("try-out").textContent = "翻译失败：" + e.message;
+    }
+  };
+  $("try-in").addEventListener("keydown", (e) => { if (e.key === "Enter") $("try-btn").click(); });
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  /* ---------------- 启动 ---------------- */
+  $("pv").addEventListener("load", () => { fitPreview(); pushPreview(); });
+  fitPreview();
+  loadConfig();
+})();
+</script>
+</body>
+</html>

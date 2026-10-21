@@ -25,8 +25,24 @@ _IGNORED = str.maketrans("", "", "、。，．,.!?！？…‥・「」『』（
 
 
 def normalize(text: str) -> str:
-    """去掉标点和空白，全角字母数字转半角（用于整句匹配）。"""
-    return unicodedata.normalize("NFKC", text or "").translate(_IGNORED).strip()
+    """去掉标点和空白，全角字母数字转半角（用于整句匹配）。
+
+    还会削掉**结尾**的拖音符号（`こんばんはー` / `おつかれ〜`）：
+    口语里几乎每句寒暄都带拖音，不削就永远匹配不上整句表。
+    """
+    return (
+        unicodedata.normalize("NFKC", text or "")
+        .translate(_IGNORED)
+        .strip()
+        .rstrip("ー〜～")
+    )
+
+
+@dataclass(frozen=True)
+class Phrase:
+    ja: str
+    zh: str
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -43,12 +59,32 @@ class Glossary:
     phrases: dict[str, str] = field(default_factory=dict)
     terms: tuple[Term, ...] = ()
     sources: tuple[Path, ...] = ()
+    # 给设置面板用的原始行（phrases 的键是归一化后的，丢掉了原写法）
+    phrase_rows: tuple[Phrase, ...] = ()
 
     def __bool__(self) -> bool:
         return bool(self.phrases or self.terms)
 
     def __len__(self) -> int:
         return len(self.phrases) + len(self.terms)
+
+    def to_rows(self) -> dict[str, list[dict]]:
+        """给设置面板：把当前词典还原成可编辑的行。"""
+        return {
+            "phrases": [
+                {"ja": p.ja, "zh": p.zh, "note": p.note} for p in self.phrase_rows
+            ],
+            "terms": [
+                {
+                    "ja": t.ja,
+                    "zh": t.zh,
+                    "mode": t.mode,
+                    "wrong": "|".join(t.wrong),
+                    "note": t.note,
+                }
+                for t in self.terms
+            ],
+        }
 
     # ---------- 查询 ----------
 
@@ -130,6 +166,7 @@ def load_glossary(dir_name: str = "glossary") -> Glossary:
                 dirs.append(path)
 
     phrases: dict[str, str] = {}
+    phrase_rows: dict[str, Phrase] = {}
     terms: dict[str, Term] = {}
     used: list[Path] = []
 
@@ -143,7 +180,9 @@ def load_glossary(dir_name: str = "glossary") -> Glossary:
                 for row in rows:
                     key = normalize(row[0])
                     if key:
+                        note = row[2] if len(row) > 2 else ""
                         phrases[key] = row[1]
+                        phrase_rows[key] = Phrase(row[0], row[1], note)
             else:
                 for row in rows:
                     term = _to_term(row)
@@ -151,7 +190,12 @@ def load_glossary(dir_name: str = "glossary") -> Glossary:
                         terms[term.ja] = term  # 后加载的覆盖先加载的
 
     ordered = tuple(sorted(terms.values(), key=lambda t: (-len(t.ja), t.ja)))
-    return Glossary(phrases=phrases, terms=ordered, sources=tuple(used))
+    return Glossary(
+        phrases=phrases,
+        terms=ordered,
+        sources=tuple(used),
+        phrase_rows=tuple(phrase_rows.values()),
+    )
 
 
 def _read_tsv(path: Path) -> list[list[str]]:
@@ -175,3 +219,62 @@ def _to_term(row: list[str]) -> Term | None:
     if mode == "post" and not wrong:
         return None  # post 没有错误写法就没有意义，当成写错了
     return Term(ja=row[0], zh=zh, mode=mode, wrong=wrong, note=note)
+
+
+_PHRASE_HEADER = (
+    "# 固定表达表：整句精确匹配（忽略标点、空格、结尾拖音）\n"
+    "# 格式：日本語 <TAB> 中文 <TAB> 说明\n"
+    "# 由设置面板写入；手改也可以，注意用 Tab 分隔、保存为 UTF-8。\n"
+)
+_TERM_HEADER = (
+    "# 术语表：日文原词 <TAB> 中文 <TAB> 模式(pre/post) <TAB> 错误写法(<竖线>分隔，仅 post) <TAB> 说明\n"
+    "# pre  = 译前把日文词换成中文再送模型（片假名专名、游戏名）\n"
+    "# post = 正常翻译，译后替换错误写法（只在原句出现该词时生效）\n"
+    "# 由设置面板写入；手改也可以，注意用 Tab 分隔、保存为 UTF-8。\n"
+)
+
+
+def _clean_cell(value: object) -> str:
+    return str(value or "").replace("\t", " ").replace("\n", " ").replace("\r", " ").strip()
+
+
+def save_glossary(
+    dir_name: str,
+    phrases: list[dict],
+    terms: list[dict],
+) -> list[Path]:
+    """把面板里的词典写回 TSV（写到**用户目录**，覆盖内置条目）。
+
+    返回写出的文件路径。格式非法（缺 ja/zh）的行会被跳过，不写垃圾进文件。
+    """
+    from ..config import data_dir
+
+    target = Path(dir_name)
+    if not target.is_absolute():
+        target = data_dir() / dir_name
+    target.mkdir(parents=True, exist_ok=True)
+
+    phrase_lines = [_PHRASE_HEADER]
+    for row in phrases:
+        ja, zh = _clean_cell(row.get("ja")), _clean_cell(row.get("zh"))
+        if not ja or not zh:
+            continue
+        phrase_lines.append(f"{ja}\t{zh}\t{_clean_cell(row.get('note'))}")
+
+    term_lines = [_TERM_HEADER]
+    for row in terms:
+        ja, zh = _clean_cell(row.get("ja")), _clean_cell(row.get("zh"))
+        if not ja or not zh:
+            continue
+        mode = "post" if str(row.get("mode", "pre")).lower() == "post" else "pre"
+        wrong = "|".join(w.strip() for w in str(row.get("wrong", "")).split("|") if w.strip())
+        if mode == "post" and not wrong:
+            continue  # post 必须有错误写法，否则等于没写
+        term_lines.append(f"{ja}\t{zh}\t{mode}\t{wrong}\t{_clean_cell(row.get('note'))}")
+
+    written = []
+    for name, lines in (("phrases.tsv", phrase_lines), ("terms.tsv", term_lines)):
+        path = target / name
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        written.append(path)
+    return written

@@ -336,6 +336,9 @@
         (msg.history || []).slice(-state.maxLines).forEach((line) => addLine(line, { silent: true }));
       } else if (msg.type === "line") {
         addLine(msg);
+      } else if (msg.type === "config") {
+        // 设置面板保存后推过来的新样式：立刻生效，不用刷新 OBS
+        applyConfig(msg.config);
       } else if (msg.type === "status") {
         state.status = msg;
         updateHud();
@@ -368,6 +371,16 @@
       if (Date.now() - downSince > 8000) warn.classList.add("on");
     }
   }, 2000);
+
+  /* ---------------- 设置面板的实时预览 ---------------- */
+
+  window.addEventListener("message", (event) => {
+    if (event.origin !== location.origin) return;
+    const data = event.data;
+    if (data && data.type === "preview-config" && data.config) {
+      applyConfig(data.config);
+    }
+  });
 
   /* ---------------- 启动 ---------------- */
 

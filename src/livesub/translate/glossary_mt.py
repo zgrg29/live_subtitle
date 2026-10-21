@@ -48,7 +48,10 @@ class GlossaryTranslator:
         if not text:
             return ""
 
-        phrase = self._glossary.phrase(text, self._max_phrase)
+        # 取一次本地引用：设置面板热加载时整体替换，不会出现"半新半旧"
+        g = self._glossary
+
+        phrase = g.phrase(text, self._max_phrase)
         if phrase is not None:
             self._bump("phrase")
             return clean(phrase)
@@ -57,13 +60,17 @@ class GlossaryTranslator:
             text = punctuate(text)
             self._bump("punct")
 
-        hits = self._glossary.match_terms(text)
-        source = self._glossary.rewrite_source(text, hits) if hits else text
+        hits = g.match_terms(text)
+        source = g.rewrite_source(text, hits) if hits else text
         zh = self._inner.translate(source)
         if hits:
-            zh = self._glossary.repair_target(zh, hits)
+            zh = g.repair_target(zh, hits)
         self._bump("term" if hits else "plain")
         return clean(zh)
+
+    def reload(self, glossary: Glossary) -> None:
+        """设置面板保存词典后热加载：整体替换引用即可。"""
+        self._glossary = glossary
 
     def close(self) -> None:
         close = getattr(self._inner, "close", None)

@@ -14,12 +14,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from . import APP_NAME, __version__
-from .config import Config
+from .config import CONFIG_FILENAME, Config, apply_overlay, asdict_overlay, save_section
 from .metrics import Metrics
 from .pipeline import Pipeline, PipelineStatus, Publisher
+from .text.glossary import load_glossary, save_glossary
 
 
 @dataclass
@@ -30,10 +32,12 @@ class Runtime:
     metrics: Metrics
     status: PipelineStatus
     overlay_dir: Path
+    config_path: Path | None = None
 
 
 def create_app(runtime: Runtime) -> FastAPI:
     overlay_file = runtime.overlay_dir / "index.html"
+    admin_file = runtime.overlay_dir / "admin.html"
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -66,9 +70,71 @@ def create_app(runtime: Runtime) -> FastAPI:
     async def favicon() -> Response:
         return Response(status_code=204)
 
+    @app.get("/admin")
+    async def admin() -> Response:
+        if not admin_file.exists():
+            return JSONResponse({"error": f"缺少设置页文件：{admin_file}"}, status_code=500)
+        return FileResponse(
+            admin_file,
+            media_type="text/html; charset=utf-8",
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.get("/api/config")
     async def api_config() -> dict:
-        return asdict(runtime.cfg.overlay)
+        return asdict_overlay(runtime.cfg)
+
+    @app.post("/api/config")
+    async def api_save_config(payload: dict) -> dict:
+        """设置面板保存样式：改内存 → 写 config.toml → 广播给字幕页（无需重启）。"""
+        values = apply_overlay(runtime.cfg, payload)
+        try:
+            save_section(runtime.config_path or CONFIG_FILENAME, "overlay", values)
+        except Exception as exc:  # 写盘失败也要把内存里的改动告诉用户
+            return JSONResponse({"error": f"写入 config.toml 失败：{exc}"}, status_code=500)
+        runtime.publisher.publish({"type": "config", "config": values})
+        return {"ok": True, "config": values}
+
+    @app.get("/api/glossary")
+    async def api_glossary() -> dict:
+        glossary = load_glossary(runtime.cfg.glossary.dir)
+        return {"ok": True, **glossary.to_rows()}
+
+    @app.post("/api/glossary")
+    async def api_save_glossary(payload: dict) -> dict:
+        """保存词典：写 TSV → 热加载 → 返回重新读进来的内容。"""
+        try:
+            paths = save_glossary(
+                runtime.cfg.glossary.dir,
+                list(payload.get("phrases") or []),
+                list(payload.get("terms") or []),
+            )
+        except Exception as exc:
+            return JSONResponse({"error": f"写入词典失败：{exc}"}, status_code=500)
+        runtime.pipeline.reload_glossary()
+        glossary = load_glossary(runtime.cfg.glossary.dir)
+        return {
+            "ok": True,
+            "written": [str(p) for p in paths],
+            "reloaded": isinstance(runtime.pipeline.mt, object),
+            **glossary.to_rows(),
+        }
+
+    @app.post("/api/translate")
+    async def api_translate(payload: dict) -> dict:
+        """试译：用当前引擎（含词典）翻一句，给面板做即时验证。"""
+        ja = str(payload.get("ja") or "").strip()
+        if not ja:
+            return {"ok": True, "zh": ""}
+        try:
+            zh = await run_in_threadpool(runtime.pipeline.mt.translate, ja)
+        except Exception as exc:
+            # 常见于用 --wav 跑完一遍之后：引擎已经 close 了
+            return JSONResponse(
+                {"error": f"翻译引擎当前不可用（{type(exc).__name__}）：{exc}"},
+                status_code=503,
+            )
+        return {"ok": True, "zh": zh}
 
     @app.get("/api/health")
     async def api_health() -> dict:
