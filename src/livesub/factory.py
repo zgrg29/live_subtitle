@@ -72,11 +72,12 @@ def build_mt(cfg: Config, force_mock: bool = False) -> Translator:
         try:
             from .translate.opus_onnx import OpusOnnxTranslator
 
-            return OpusOnnxTranslator(
+            mt = OpusOnnxTranslator(
                 cfg.mt.model_dir,
                 num_threads=cfg.mt.num_threads,
                 max_new_tokens=cfg.mt.max_new_tokens,
             )
+            return _wrap_glossary(cfg, mt)
         except Exception as exc:
             _LAST_MT_ERROR[0] = f"{type(exc).__name__}: {exc}"
             if engine == "opus" and not cfg.mt.fallback_to_none:
@@ -116,6 +117,25 @@ def build_mt(cfg: Config, force_mock: bool = False) -> Translator:
             return NullTranslator()
 
     raise ValueError(f"未知的翻译引擎：{engine}（支持 qwen / m2m100 / none / echo）")
+
+
+def _wrap_glossary(cfg: Config, mt: Translator) -> Translator:
+    """给翻译引擎套上文本层（术语表 + 译前补标点）。词典坏了也不能阻止字幕。"""
+    want_glossary = cfg.glossary.enabled
+    want_punct = cfg.mt.punctuate
+    if not want_glossary and not want_punct:
+        return mt
+    try:
+        from .text.glossary import Glossary, load_glossary
+        from .translate.glossary_mt import GlossaryTranslator
+
+        glossary = load_glossary(cfg.glossary.dir) if want_glossary else Glossary()
+        if not glossary and not want_punct:
+            return mt
+        return GlossaryTranslator(mt, glossary, cfg.glossary.max_phrase_len, want_punct)
+    except Exception as exc:
+        _LAST_MT_ERROR[0] = f"glossary: {type(exc).__name__}: {exc}"
+        return mt
 
 
 def _m2m100_path(cfg: Config) -> Path:

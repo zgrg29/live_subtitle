@@ -45,11 +45,22 @@ lead_pad_ms = 200
 fallback_to_mock = true
 
 [mt]
-# echo=占位（不翻译），none=只显示日语
-engine = "echo"
+# opus=默认（75M ONNX，快且准）| echo=不翻译 | none=只显示日语
+engine = "opus"
+model_dir = "models/opus-mt-ja-zh-int8"
+num_threads = 2
 target_lang = "zh"
 max_chars = 40
+# 译前给 ASR 的无标点文本补句末标点（实测 F1 0.456 → 0.504）
+punctuate = true
 max_new_tokens = 48
+
+[glossary]
+# 术语表 / 固定表达总开关；关掉就是纯模型输出
+enabled = true
+# 词典目录（phrases.tsv + terms.tsv）
+dir = "glossary"
+max_phrase_len = 24
 
 [overlay]
 # 是否显示日语原文

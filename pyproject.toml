@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "livesub"
-version = "0.2.1"
+version = "0.3.0"
 description = "给 OBS 用的本地实时日语→中文字幕（麦克风输入，纯本地，低延迟）"
 readme = "README.md"
 requires-python = ">=3.10"

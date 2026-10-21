@@ -20,6 +20,10 @@ import numpy as np
 
 from ..config import data_dir
 
+# 连续这么多个相同的 token 就认为解码崩了（实测 フレームレート → "Flame"×7），
+# 提前收手能省掉最坏 500ms；残留的重复再由 text/postprocess 折叠掉。
+_MAX_SAME_TOKEN_RUN = 5
+
 
 class OpusOnnxTranslator:
     def __init__(
@@ -67,7 +71,6 @@ class OpusOnnxTranslator:
         self._tok = MarianTokenizer.from_pretrained(str(self._dir))
         self._lock = threading.Lock()
         self.name = f"opus-onnx:{self._dir.name}"
-
     def translate(self, ja: str) -> str:
         text = (ja or "").strip()
         if not text:
@@ -94,6 +97,7 @@ class OpusOnnxTranslator:
         logits = outputs[0]
         past = _as_past(self._dec0_out, outputs)
         tokens = [int(np.argmax(logits[0, -1]))]
+        run = 1
 
         for _ in range(self._max_new - 1):
             if tokens[-1] == self._eos:
@@ -106,7 +110,11 @@ class OpusOnnxTranslator:
             outputs = self._dec.run(self._dec_out, feeds)
             # 只更新 decoder 侧的 K/V；encoder 侧沿用第一步的结果
             past.update(_as_past(self._dec_out, outputs))
-            tokens.append(int(np.argmax(outputs[0][0, -1])))
+            nxt = int(np.argmax(outputs[0][0, -1]))
+            run = run + 1 if nxt == tokens[-1] else 1
+            tokens.append(nxt)
+            if run >= _MAX_SAME_TOKEN_RUN or _is_looping(tokens):
+                break
 
         if tokens and tokens[-1] == self._eos:
             tokens = tokens[:-1]
@@ -114,6 +122,23 @@ class OpusOnnxTranslator:
 
     def close(self) -> None:
         self._enc = self._dec0 = self._dec = None  # type: ignore[assignment]
+
+
+def _is_looping(tokens: list[int], max_period: int = 8, repeats: int = 3) -> bool:
+    """解码是不是陷入了自我重复（周期 1~8 个 token、重复 3 次）。
+
+    比"连续 N 个相同 token"通用：`Flame , Flame ,` 和 `mike comming mike comming`
+    这类整句打转的失败都靠它收手。
+    """
+    n = len(tokens)
+    for period in range(1, max_period + 1):
+        if n < period * repeats:
+            continue
+        tail = tokens[n - period:]
+        if all(tokens[n - period * (k + 1): n - period * k] == tail
+               for k in range(1, repeats)):
+            return True
+    return False
 
 
 def _as_past(out_names: list[str], outputs: list) -> dict:

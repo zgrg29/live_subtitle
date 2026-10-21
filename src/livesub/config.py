@@ -114,7 +114,15 @@ class MTConfig:
     num_threads: int = 2
     target_lang: str = "zh"
     max_chars: int = 40  # 中文单行硬上限
+    punctuate: bool = True  # 译前给 ASR 的无标点文本补句末标点（实测 +0.05 F1）
     fallback_to_none: bool = True  # 模型缺失时只显示日语，不阻止启动
+
+
+@dataclass
+class GlossaryConfig:
+    enabled: bool = True  # 关掉就是"裸模型"，用于 A/B 对比
+    dir: str = "glossary"  # 相对 exe 目录 / 项目根；用户可放同名文件覆盖内置条目
+    max_phrase_len: int = 24  # 超过这个长度就不做整句查表，避免长句被套模板
 
 
 @dataclass
@@ -155,6 +163,7 @@ class Config:
     segment: SegmentConfig = None  # type: ignore[assignment]
     asr: ASRConfig = None  # type: ignore[assignment]
     mt: MTConfig = None  # type: ignore[assignment]
+    glossary: GlossaryConfig = None  # type: ignore[assignment]
     overlay: OverlayConfig = None  # type: ignore[assignment]
     server: ServerConfig = None  # type: ignore[assignment]
     debug: DebugConfig = None  # type: ignore[assignment]
@@ -171,6 +180,7 @@ _SECTIONS = {
     "segment": SegmentConfig,
     "asr": ASRConfig,
     "mt": MTConfig,
+    "glossary": GlossaryConfig,
     "overlay": OverlayConfig,
     "server": ServerConfig,
     "debug": DebugConfig,
@@ -271,6 +281,12 @@ def _validate(cfg: Config) -> None:
     cfg.mt.num_threads = max(1, min(16, _num(cfg.mt.num_threads, 2, int)))
     cfg.mt.context = max(128, min(4096, _num(cfg.mt.context, 512, int)))
     cfg.mt.fallback_to_none = _bool(cfg.mt.fallback_to_none, True)
+    cfg.mt.punctuate = _bool(cfg.mt.punctuate, True)
+
+    gl = cfg.glossary
+    gl.enabled = _bool(gl.enabled, True)
+    gl.dir = str(gl.dir if gl.dir is not None else "glossary")
+    gl.max_phrase_len = max(4, min(64, _num(gl.max_phrase_len, 24, int)))
 
     o = cfg.overlay
     o.bilingual = _bool(o.bilingual, True)
@@ -338,6 +354,11 @@ _COMMENTS: dict[str, dict[str, str]] = {
         "lead_pad_ms": "段首补一点静音，避免模型吞掉第一个短词；一般不用改",
     },
     "mt": {"engine": "opus=默认（75M，快且准）| qwen=更准但慢得多 | none=只显示日语"},
+    "glossary": {
+        "enabled": "术语表/固定表达总开关；关掉就是纯模型输出，用于对比",
+        "dir": "词典目录（phrases.tsv + terms.tsv）；把同名文件放到 exe 旁可覆盖内置条目",
+        "max_phrase_len": "超过这个长度就不做整句查表",
+    },
     "overlay": {
         "bilingual": "是否显示日语原文",
         "zh_size": "中文字号(px)，按 OBS 画布 1920x1080 计算",

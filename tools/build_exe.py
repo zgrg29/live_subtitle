@@ -34,14 +34,16 @@ def run(cmd: list[str]) -> None:
         raise SystemExit(f"命令失败（{result.returncode}）：{cmd[0]}")
 
 
-def build(with_models: bool) -> None:
+def build(with_models: bool, out_name: str = "LiveSub") -> None:
+    dist = ROOT / "dist" / out_name
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm", "--clean", "--onedir",
         "--name", "LiveSub",
         "--console",
-        # 静态资源：字幕页
+        # 静态资源：字幕页、术语表
         "--add-data", f"{ROOT / 'overlay'};overlay",
+        "--add-data", f"{ROOT / 'glossary'};glossary",
         # 这些是延迟导入/动态导入，PyInstaller 静态分析看不到
         "--hidden-import", "sounddevice",
         "--collect-data", "sounddevice",
@@ -63,24 +65,35 @@ def build(with_models: bool) -> None:
         "--exclude-module", "sympy",
         "--exclude-module", "ctranslate2",
         "--exclude-module", "hf_xet",
+        # 先打到 build/ 里，成功后再搬到 dist/：dist/ 下可能有被占用或受保护的旧产物，
+        # PyInstaller 直接往里写会在删除旧目录时失败（Windows 权限，实测踩过）。
+        "--distpath", str(ROOT / "build" / "pkg"),
+        "--workpath", str(ROOT / "build" / "pyi"),
         str(ROOT / "launcher.py"),
     ]
     run(cmd)
 
+    built = ROOT / "build" / "pkg" / "LiveSub"
+    if not built.exists():
+        raise SystemExit(f"打包产物不存在：{built}")
+    if dist.exists():
+        shutil.rmtree(dist)
+    shutil.move(str(built), str(dist))
+
     # 配置文件样例 + 说明
     example = ROOT / "config.example.toml"
     if example.exists():
-        shutil.copy2(example, DIST / "config.example.toml")
+        shutil.copy2(example, dist / "config.example.toml")
     # 有本地 config.toml 就一起带上，保证绿色版的行为和开发时一致；
     # 但如果它绑定了具体麦克风名，就不要带（别人电脑上没有那个设备）。
     local_config = ROOT / "config.toml"
     if local_config.exists():
         text = local_config.read_text(encoding="utf-8", errors="replace")
         if 'device = ""' in text:
-            shutil.copy2(local_config, DIST / "config.toml")
+            shutil.copy2(local_config, dist / "config.toml")
         else:
             print("[跳过] 本地 config.toml 绑定了具体麦克风，不复制进绿色版")
-    (DIST / "使用说明.txt").write_text(
+    (dist / "使用说明.txt").write_text(
         "LiveSub 绿色版\n"
         "====================\n\n"
         "1. 双击 LiveSub.exe，会开一个黑色窗口，别关它。\n"
@@ -100,23 +113,25 @@ def build(with_models: bool) -> None:
         if not src.exists():
             print("[跳过] 源目录没有 models/，产物将是纯演示版")
         else:
-            print(f"复制模型 {src} → {DIST / 'models'} …")
-            shutil.copytree(src, DIST / "models", dirs_exist_ok=True)
+            print(f"复制模型 {src} → {dist / 'models'} …")
+            shutil.copytree(src, dist / "models", dirs_exist_ok=True)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-models", action="store_true", help="不把 models/ 复制进去")
+    parser.add_argument("--out", default="LiveSub", help="dist/ 下的子目录名，默认 LiveSub")
     args = parser.parse_args()
     try:
         import PyInstaller  # noqa: F401
     except Exception:
         print("缺少 PyInstaller，请先： pip install pyinstaller")
         return 2
-    build(with_models=not args.no_models)
+    build(with_models=not args.no_models, out_name=args.out)
 
-    exe = DIST / "LiveSub.exe"
-    size = sum(f.stat().st_size for f in DIST.rglob("*") if f.is_file()) / 1048576
+    dist = ROOT / "dist" / args.out
+    exe = dist / "LiveSub.exe"
+    size = sum(f.stat().st_size for f in dist.rglob("*") if f.is_file()) / 1048576
     print(f"\n完成：{exe}")
     print(f"整个目录 {size:.0f} MB，可以打包成 zip 发给别人")
     return 0
