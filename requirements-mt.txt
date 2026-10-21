@@ -1,0 +1,8 @@
+# 真实翻译引擎：opus-mt-ja-zh（75M）+ ONNX Runtime
+# 不依赖 torch：模型已经导出成 ONNX，运行时只需要推理引擎和分词器。
+onnxruntime>=1.17
+transformers>=4.40
+sentencepiece>=0.2
+
+# 可选：如果要用 m2m100 引擎（质量较差，仅作对照）
+# ctranslate2>=4.0

@@ -1,0 +1,244 @@
+"""音频源。
+
+三种实现共用同一个鸭子类型接口：
+
+    source.sample_rate -> int
+    source.frames()    -> 逐块产出 float32 单声道 numpy 数组
+    source.close()
+
+MicSource 用 sounddevice（PortAudio），延迟设为 low；blocksize 固定，
+这样下游的 VAD/切句逻辑看到的是稳定的 20ms 网格。
+"""
+
+from __future__ import annotations
+
+import queue
+import threading
+import time
+import wave
+from pathlib import Path
+from typing import Iterator, Protocol
+
+import numpy as np
+
+
+class AudioSource(Protocol):
+    name: str
+    sample_rate: int
+
+    def frames(self) -> Iterator[np.ndarray]: ...
+
+    def close(self) -> None: ...
+
+
+def list_input_devices() -> list[tuple[int, str, int]]:
+    """返回 (索引, 名称, 最大输入通道数)，用于 `livesub devices`。"""
+    import sounddevice as sd
+
+    out: list[tuple[int, str, int]] = []
+    for idx, dev in enumerate(sd.query_devices()):
+        channels = int(dev["max_input_channels"])
+        if channels > 0:
+            out.append((idx, str(dev["name"]), channels))
+    return out
+
+
+def resolve_input_device(device: str) -> int | None:
+    """把配置里的设备名（可只写一部分）解析成 sounddevice 的设备索引。
+
+    留空返回 None，表示交给 PortAudio 用系统默认设备。
+    """
+    import sounddevice as sd
+
+    if not device or not device.strip():
+        try:
+            default = sd.query_devices(kind="input")
+        except Exception as exc:  # 没有可用输入设备
+            raise RuntimeError(f"找不到可用的麦克风：{exc}") from exc
+        if int(default["max_input_channels"]) <= 0:
+            raise RuntimeError("系统默认设备不是输入设备，请在 config.toml 里指定麦克风")
+        return None
+
+    needle = device.strip().lower()
+    matches = [
+        (idx, str(dev["name"]))
+        for idx, dev in enumerate(sd.query_devices())
+        if needle in str(dev["name"]).lower() and int(dev["max_input_channels"]) > 0
+    ]
+    if not matches:
+        names = "\n".join(f"  [{i}] {n}" for i, n, _ in list_input_devices())
+        raise RuntimeError(f"没找到名称包含 {device!r} 的麦克风。可用设备：\n{names}")
+    return matches[0][0]
+
+
+class MicSource:
+    """麦克风实时采集。"""
+
+    def __init__(
+        self,
+        device: str = "",
+        sample_rate: int = 16000,
+        block_ms: int = 20,
+        gain: float = 1.0,
+    ) -> None:
+        try:
+            import sounddevice as sd
+        except Exception as exc:  # pragma: no cover - 依赖缺失时给清晰提示
+            raise RuntimeError("缺少 sounddevice，请先 pip install -r requirements.txt") from exc
+
+        self._sd = sd
+        self.sample_rate = sample_rate
+        self.block_ms = block_ms
+        self.gain = float(gain)
+        self._queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=400)
+        self._stop = threading.Event()
+        self._last_cb = time.monotonic()
+        self.dropped_blocks = 0
+
+        device_index = resolve_input_device(device)
+        info = sd.query_devices(device_index, kind="input")
+        self.name = str(info["name"])
+
+        blocksize = max(1, int(sample_rate * block_ms / 1000))
+        self._stream = sd.InputStream(
+            device=device_index,
+            samplerate=sample_rate,
+            channels=1,
+            dtype="float32",
+            blocksize=blocksize,
+            latency="low",
+            callback=self._callback,
+        )
+        self._stream.start()
+
+    def _callback(self, indata, frames, time_info, status) -> None:  # noqa: ANN001
+        if status:
+            # 溢出/欠载只记录，不打断
+            pass
+        self._last_cb = time.monotonic()
+        chunk = np.asarray(indata[:, 0], dtype=np.float32).copy()
+        if self.gain != 1.0:
+            chunk *= self.gain
+        try:
+            self._queue.put_nowait(chunk)
+        except queue.Full:
+            self.dropped_blocks += 1
+
+    def frames(self) -> Iterator[np.ndarray]:
+        while not self._stop.is_set():
+            try:
+                yield self._queue.get(timeout=0.25)
+            except queue.Empty:
+                # 设备被拔出 / USB 休眠 / 被独占时，PortAudio 不再回调。
+                # 不检测的话这里会永远空转，界面停在最后一句且"看起来一切正常"。
+                if time.monotonic() - self._last_cb > 5.0:
+                    raise RuntimeError(
+                        "麦克风超过 5 秒没有音频数据（设备可能被拔出、休眠或被其他程序独占）"
+                    )
+                continue
+
+    def close(self) -> None:
+        self._stop.set()
+        try:
+            self._stream.stop()
+            self._stream.close()
+        except Exception:
+            pass
+
+
+class WavSource:
+    """回放一个 WAV 文件，用于离线调试（不需要麦克风）。"""
+
+    def __init__(self, path: str | Path, sample_rate: int = 16000, block_ms: int = 20,
+                 realtime: bool = False) -> None:
+        self.path = Path(path)
+        self.sample_rate = sample_rate
+        self.block_ms = block_ms
+        self.realtime = realtime
+        self.name = f"wav:{self.path.name}"
+        self._stop = threading.Event()
+        self._data = self._read()
+
+    def _read(self) -> np.ndarray:
+        with wave.open(str(self.path), "rb") as wf:
+            if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
+                raise RuntimeError("只支持 16-bit 单声道 WAV，请先转换")
+            rate = wf.getframerate()
+            raw = wf.readframes(wf.getnframes())
+        data = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        if rate != self.sample_rate:
+            # 简易重采样：线性插值，够用
+            n = int(len(data) * self.sample_rate / rate)
+            src = np.linspace(0, len(data) - 1, num=n)
+            data = np.interp(src, np.arange(len(data)), data).astype(np.float32)
+        return data
+
+    def frames(self) -> Iterator[np.ndarray]:
+        step = max(1, int(self.sample_rate * self.block_ms / 1000))
+        started = time.perf_counter()
+        sent = 0
+        for start in range(0, len(self._data), step):
+            if self._stop.is_set():
+                return
+            yield self._data[start : start + step]
+            sent += step
+            if self.realtime:
+                target = started + sent / self.sample_rate
+                delay = target - time.perf_counter()
+                if delay > 0:
+                    time.sleep(delay)
+
+    def close(self) -> None:
+        self._stop.set()
+
+
+class SyntheticSource:
+    """合成"人声节奏"的信号：几段响 → 静，用于在没有任何硬件/模型时验证整条链路。"""
+
+    def __init__(self, seconds: float = 6.0, sample_rate: int = 16000, block_ms: int = 20,
+                 seed: int = 7, realtime: bool = False) -> None:
+        self.sample_rate = sample_rate
+        self.block_ms = block_ms
+        self.realtime = realtime
+        self.name = "synthetic"
+        self._stop = threading.Event()
+        self._data = self._build(seconds, seed)
+
+    def _build(self, seconds: float, seed: int) -> np.ndarray:
+        rng = np.random.default_rng(seed)
+        total = int(seconds * self.sample_rate)
+        out = np.zeros(total, dtype=np.float32)
+        amplitude = 0.03  # RMS 约 0.02，明显高于默认 VAD 门限 0.008
+        pos = int(0.4 * self.sample_rate)
+        while pos < total - int(1.2 * self.sample_rate):
+            dur = int(rng.uniform(1.0, 1.8) * self.sample_rate)
+            end = min(total, pos + dur)
+            t = np.arange(end - pos) / self.sample_rate
+            tone = np.sin(2 * np.pi * 220 * t) * 0.7 + np.sin(2 * np.pi * 660 * t) * 0.3
+            tone += rng.normal(0, 0.15, size=tone.shape)
+            env = np.ones_like(t)
+            edge = min(len(t), int(0.03 * self.sample_rate))
+            if edge > 1:
+                env[:edge] = np.linspace(0, 1, edge)
+                env[-edge:] = np.linspace(1, 0, edge)
+            out[pos:end] = (tone * env * amplitude).astype(np.float32)
+            pos = end + int(rng.uniform(0.8, 1.1) * self.sample_rate)
+        return out
+
+    def frames(self) -> Iterator[np.ndarray]:
+        step = max(1, int(self.sample_rate * self.block_ms / 1000))
+        started = time.perf_counter()
+        sent = 0
+        for start in range(0, len(self._data), step):
+            if self._stop.is_set():
+                return
+            block = self._data[start : start + step]
+            yield block
+            sent += len(block)
+            if self.realtime:
+                delay = started + sent / self.sample_rate - time.perf_counter()
+                if delay > 0:
+                    time.sleep(delay)
+
+    def close(self) -> None:
+        self._stop.set()

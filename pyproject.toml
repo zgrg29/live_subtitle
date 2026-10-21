@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "livesub"
+version = "0.2.1"
+description = "给 OBS 用的本地实时日语→中文字幕（麦克风输入，纯本地，低延迟）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "zgrg29" }]
+dependencies = [
+    "numpy>=1.24",
+    "sounddevice>=0.4.6",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
+
+[project.optional-dependencies]
+# 真正的日语识别引擎（含 onnxruntime）。不装也能跑 demo。
+asr = ["sherpa-onnx>=1.10"]
+
+[project.scripts]
+livesub = "livesub.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["livesub", "livesub.audio", "livesub.asr", "livesub.text", "livesub.translate"]
+
+[tool.ruff]
+line-length = 100

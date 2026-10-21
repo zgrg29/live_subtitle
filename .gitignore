@@ -1,0 +1,21 @@
+# 本地配置与运行时产物
+config.toml
+runtime.json
+logs/
+models/
+.tmp/
+.testtmp/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.spec
+*.egg-info/
+.pytest_cache/
+
+# 编辑器
+.vscode/
+.idea/

@@ -1,0 +1,81 @@
+# LiveSub 配置。改完重启程序生效。
+# 全部留空/默认即可运行；只有换麦克风或调样式时才需要动这里。
+
+[audio]
+# 留空=系统默认麦克风；填设备名的一部分即可匹配
+device = ""
+sample_rate = 16000
+block_ms = 20
+# 音量增益，麦克风太小声可以调到 1.5~2.0
+gain = 1.0
+
+[vad]
+threshold = 0.008
+noise_ratio = 2.5
+# 越大越能挡掉咳嗽/碰麦的杂音
+min_speech_ms = 160
+# 静音多久算这句话结束；切碎了由 [segment] 的合并兜底
+end_silence_ms = 320
+max_utterance_s = 8.0
+min_utterance_ms = 250
+pre_roll_ms = 120
+
+[segment]
+# 半句合并：句子看起来没说完时先不上屏，等后续语音合并成一句
+merge = true
+# 最多等多久的后续语音（毫秒）；等不到就到点照常上屏
+merge_wait_ms = 800
+# 最多合并几段，防止一句话无限等
+max_merge = 2
+# 合并后音频总长上限（秒）
+max_total_s = 12.0
+# 暂缓的硬上限；正常不会触发，只是避免一直空屏
+max_hold_ms = 12000
+# 上一段短于此值才合并重识别；长片段直接拼文本，省一次 ASR
+re_asr_under_ms = 2500
+
+[asr]
+engine = "auto"
+# 模型目录，用 python -m livesub download 下载
+model_dir = "models/sherpa-ja"
+# CPU 线程数；用 x264 软编码推流时建议 1~2
+num_threads = 2
+# 段首补一点静音，避免模型吞掉第一个短词；一般不用改
+lead_pad_ms = 200
+fallback_to_mock = true
+
+[mt]
+# echo=占位（不翻译），none=只显示日语
+engine = "echo"
+target_lang = "zh"
+max_chars = 40
+max_new_tokens = 48
+
+[overlay]
+# 是否显示日语原文
+bilingual = true
+font_family = "\"Microsoft YaHei\", \"Noto Sans SC\", \"PingFang SC\", sans-serif"
+# 中文字号(px)，按 OBS 画布 1920x1080 计算
+zh_size = 48
+ja_size = 26
+zh_color = "#FFFFFF"
+ja_color = "#B9C6D4"
+outline_color = "#000000"
+# 描边宽度(px)，0 表示不要描边
+outline_width = 4
+background = "transparent"
+position = "bottom"
+margin_percent = 8
+max_lines = 2
+line_gap = 10
+fade_ms = 180
+
+[server]
+host = "127.0.0.1"
+# OBS 浏览器源里要填的端口
+port = 8765
+
+[debug]
+save_wav = false
+log_utf8 = true
+show_latency_hud = false

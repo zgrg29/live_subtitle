@@ -1,0 +1,8 @@
+# 最小可运行依赖（纯 CPU，无模型也能跑 demo）
+numpy>=1.24
+sounddevice>=0.4.6
+fastapi>=0.110
+uvicorn[standard]>=0.29
+
+# 真实日语识别引擎，按需安装：
+#   pip install -r requirements-asr.txt

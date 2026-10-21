@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LiveSub 字幕</title>
+<style>
+  :root {
+    --font: "Microsoft YaHei", "Noto Sans SC", "PingFang SC", sans-serif;
+    --zh-size: 48px;
+    --ja-size: 26px;
+    --zh-color: #ffffff;
+    --ja-color: #b9c6d4;
+    --outline-color: #000000;
+    --outline-w: 4px;
+    --bg: transparent;
+    --gap: 10px;
+    --fade: 180ms;
+    --margin: 8%;
+    /* 视口缩放系数，必须是「无单位数」，由 JS 写入。
+       不能写 calc(100vw / 1920)：那是「长度 ÷ 长度」，在 font-size 里会变成
+       「长度 × 长度」，非法表达式，整条 font-size 会被浏览器丢弃 → 字永远是 16px。 */
+    --k: 1;
+  }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body { font-family: var(--font); }
+
+  #stage {
+    position: fixed;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--gap);
+    padding: 0 5%;
+    pointer-events: none;
+  }
+  #stage.bottom { bottom: var(--margin); justify-content: flex-end; }
+  #stage.top    { top: var(--margin);    justify-content: flex-start; }
+
+  .line {
+    max-width: 96%;
+    text-align: center;
+    line-height: 1.28;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: var(--bg);
+    padding: 0.08em 0.35em;
+    border-radius: 0.12em;
+    animation: rise var(--fade) ease-out backwards;
+  }
+  .line.out {
+    opacity: 0;
+    transform: translateY(-0.35em);
+    transition: opacity 150ms ease, transform 150ms ease;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(0.45em); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .zh { --ow: var(--outline-w); }
+  .ja { --ow: calc(var(--outline-w) * 0.55); }
+
+  .zh, .ja {
+    /* 用多重 text-shadow 描边，而不是 -webkit-text-stroke：
+       stroke + paint-order 在部分 Chromium 上不生效，会把字形盖掉。
+       text-shadow 永远画在字的后面，最稳。 */
+    text-shadow:
+      calc(var(--ow) * -1) 0 0 var(--outline-color),
+      var(--ow) 0 0 var(--outline-color),
+      0 calc(var(--ow) * -1) 0 var(--outline-color),
+      0 var(--ow) 0 var(--outline-color),
+      calc(var(--ow) * -0.75) calc(var(--ow) * -0.75) 0 var(--outline-color),
+      calc(var(--ow) * 0.75) calc(var(--ow) * -0.75) 0 var(--outline-color),
+      calc(var(--ow) * -0.75) calc(var(--ow) * 0.75) 0 var(--outline-color),
+      calc(var(--ow) * 0.75) calc(var(--ow) * 0.75) 0 var(--outline-color),
+      0 0 calc(var(--ow) * 3) rgba(0, 0, 0, 0.55);
+  }
+
+  .zh {
+    font-size: calc(var(--zh-size) * var(--k));
+    font-weight: 700;
+    color: var(--zh-color);
+  }
+
+  .ja {
+    font-size: calc(var(--ja-size) * var(--k));
+    font-weight: 600;
+    color: var(--ja-color);
+  }
+
+  body.no-bilingual .ja { display: none; }
+
+  #hud {
+    position: fixed;
+    left: 12px;
+    top: 12px;
+    font: 13px/1.5 ui-monospace, Consolas, monospace;
+    color: #d8e2ec;
+    background: rgba(10, 14, 20, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 10px 12px;
+    pointer-events: none;
+    display: none;
+    white-space: pre;
+  }
+  #hud.on { display: block; }
+  #hud b { color: #7ee0a8; font-weight: 600; }
+  #hud .bad { color: #ff8b8b; }
+
+  /* 断线提示：只在真的断超过 8 秒时出现，正常直播看不见 */
+  #link-warn {
+    position: fixed;
+    right: 14px;
+    top: 14px;
+    font: 13px/1.4 ui-monospace, Consolas, monospace;
+    color: #ffe0e0;
+    background: rgba(122, 24, 24, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 6px;
+    padding: 5px 9px;
+    display: none;
+  }
+  #link-warn.on { display: block; }
+</style>
+</head>
+<body>
+  <div id="stage" class="bottom"></div>
+  <div id="hud"></div>
+  <div id="link-warn">字幕未连接</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const params = new URLSearchParams(location.search);
+  const DEBUG = params.get("debug") === "1";
+  const PREVIEW = params.get("preview") === "1";
+
+  const stage = document.getElementById("stage");
+  const hud = document.getElementById("hud");
+
+  const state = {
+    maxLines: 2,
+    bilingual: true,
+    connected: false,
+    lines: 0,
+    lastLatency: null,
+    status: {},
+    startedAt: Date.now(),
+  };
+
+  const PREVIEW_LINES = [
+    { ja: "このゲーム、けっこう難しいんですよね。", zh: "这个游戏挺难的啊。" },
+    { ja: "ちょっと待ってください、今行きます。", zh: "等一下，我马上来。" },
+    { ja: "みんな、コメントありがとう。", zh: "大家，谢谢评论。" },
+  ];
+
+  /* ---------------- 配置 ---------------- */
+
+  // 以 1920 宽为设计基准，按浏览器源的实际宽度等比缩放字号。
+  function applyScale() {
+    const k = Math.max(0.2, Math.min(4, window.innerWidth / 1920));
+    document.documentElement.style.setProperty("--k", k.toFixed(4));
+  }
+  window.addEventListener("resize", applyScale);
+
+  function applyConfig(cfg) {
+    if (!cfg) return;
+    const root = document.documentElement.style;
+    const num = (v, d) => (typeof v === "number" && isFinite(v) ? v : d);
+    const str = (v, d) => (typeof v === "string" && v.trim() ? v : d);
+
+    root.setProperty("--font", str(cfg.font_family, getComputedStyle(document.documentElement).getPropertyValue("--font")));
+    root.setProperty("--zh-size", num(cfg.zh_size, 48) + "px");
+    root.setProperty("--ja-size", num(cfg.ja_size, 26) + "px");
+    root.setProperty("--zh-color", str(cfg.zh_color, "#ffffff"));
+    root.setProperty("--ja-color", str(cfg.ja_color, "#b9c6d4"));
+    root.setProperty("--outline-color", str(cfg.outline_color, "#000000"));
+    root.setProperty("--outline-w", Math.max(0, num(cfg.outline_width, 4)) + "px");
+    root.setProperty("--bg", str(cfg.background, "transparent"));
+    root.setProperty("--gap", num(cfg.line_gap, 10) + "px");
+    root.setProperty("--fade", num(cfg.fade_ms, 180) + "ms");
+    root.setProperty("--margin", num(cfg.margin_percent, 8) + "%");
+
+    stage.className = cfg.position === "top" ? "top" : "bottom";
+    state.maxLines = Math.max(1, Math.min(6, num(cfg.max_lines, 2)));
+    state.bilingual = cfg.bilingual !== false;
+    document.body.classList.toggle("no-bilingual", !state.bilingual);
+    document.body.classList.toggle("debug", DEBUG);
+    hud.classList.toggle("on", DEBUG);
+  }
+
+  /* ---------------- 渲染 ---------------- */
+
+  function addLine(payload, options) {
+    const opts = options || {};
+    const ja = (payload.ja || "").trim();
+    const zh = (payload.zh || "").trim();
+    if (!ja && !zh) return;
+
+    const wrap = document.createElement("div");
+    wrap.className = "line";
+    // 只有在上方小字和下方大字都成立时才显示双语，避免同一句日语显示两遍
+    if (ja && state.bilingual && zh) {
+      const el = document.createElement("div");
+      el.className = "ja";
+      el.textContent = ja;
+      wrap.appendChild(el);
+    }
+    if (zh) {
+      const el = document.createElement("div");
+      el.className = "zh";
+      el.textContent = zh;
+      wrap.appendChild(el);
+    } else if (ja) {
+      // 没有译文时，用主字号显示原文，别让观众看到一片空白
+      const el = document.createElement("div");
+      el.className = "zh";
+      el.textContent = ja;
+      wrap.appendChild(el);
+    }
+    stage.appendChild(wrap);
+    state.lines += 1;
+
+    if (!opts.silent && payload.latency) {
+      state.lastLatency = payload.latency;
+    }
+
+    // 只保留 maxLines 行。注意：不能用 children.length 做循环条件，
+    // 因为移除是延迟执行的（淡出动画），条件永远不成立 → 死循环 → CEF 内存爆掉。
+    // 这里按「未在淡出的行」计数，每一轮都真的减少，循环必然终止。
+    while (stage.querySelectorAll(".line:not(.out)").length > state.maxLines) {
+      const oldest = stage.querySelector(".line:not(.out)");
+      if (!oldest) break;
+      oldest.classList.add("out");
+      setTimeout(() => oldest.remove(), 170);
+    }
+    // 兜底：万一定时器被节流（页面不可见），别让节点无限累积
+    while (stage.children.length > state.maxLines + 3) {
+      const extra = stage.firstElementChild;
+      if (!extra) break;
+      extra.remove();
+    }
+    updateHud();
+  }
+
+  function clearLines() {
+    stage.innerHTML = "";
+    state.lines = 0;
+  }
+
+  /* ---------------- HUD ---------------- */
+
+  function updateHud() {
+    if (!DEBUG) return;
+    const s = state.status || {};
+    const lat = state.lastLatency;
+    const up = Math.floor((Date.now() - state.startedAt) / 1000);
+    const mm = String(Math.floor(up / 60)).padStart(2, "0");
+    const ss = String(up % 60).padStart(2, "0");
+
+    hud.innerHTML =
+      `LiveSub  <b>${state.connected ? "已连接" : "未连接"}</b>\n` +
+      `识别: ${s.demo ? "演示模式" : (s.asr || "-")}\n` +
+      `翻译: ${s.mt || "-"}\n` +
+      `延迟: ${lat ? lat.end_to_line_ms + " ms" : "-"}   ` +
+      `ASR ${lat ? lat.asr_ms + " ms" : "-"}   MT ${lat ? lat.mt_ms + " ms" : "-"}\n` +
+      `行数: ${state.lines}   运行: ${mm}:${ss}` +
+      (s.last_error ? `\n<span class="bad">${s.last_error}</span>` : "");
+  }
+  setInterval(updateHud, 500);
+
+  /* ---------------- 连接 ---------------- */
+
+  let ws = null;
+  let retry = 0;
+  let gen = 0;
+  let lastMsgAt = Date.now();
+  let downSince = 0;
+
+  // 每次重连递增 generation，旧 socket 的回调一律丢弃。
+  // 否则 watchdog 重连和 onclose 重连会并存两条连接：同一条字幕渲染两遍，
+  // 旧连接的 onerror 还会把健康的新连接关掉。
+  function connect() {
+    const myGen = ++gen;
+    if (ws) {
+      try { ws.close(); } catch (e) {}
+    }
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    const sock = new WebSocket(`${scheme}://${location.host}/ws`);
+    ws = sock;
+
+    sock.onopen = () => {
+      if (myGen !== gen) return;
+      state.connected = true;
+      retry = 0;
+      lastMsgAt = Date.now();
+      updateHud();
+    };
+
+    sock.onclose = () => {
+      if (myGen !== gen) return;
+      state.connected = false;
+      updateHud();
+      if (PREVIEW) return;
+      retry = Math.min(retry + 1, 6);
+      setTimeout(() => { if (myGen === gen) connect(); }, 300 * retry);
+    };
+
+    sock.onerror = () => {
+      try { sock.close(); } catch (e) {}
+    };
+
+    sock.onmessage = (event) => {
+      if (myGen !== gen) return;
+      lastMsgAt = Date.now();
+      let msg;
+      try { msg = JSON.parse(event.data); } catch (e) { return; }
+      if (msg.type === "hello") {
+        applyConfig(msg.config);
+        state.status = msg.status || {};
+        clearLines();
+        (msg.history || []).slice(-state.maxLines).forEach((line) => addLine(line, { silent: true }));
+      } else if (msg.type === "line") {
+        addLine(msg);
+      } else if (msg.type === "status") {
+        state.status = msg;
+        updateHud();
+      } else if (msg.type === "error") {
+        state.status = Object.assign({}, state.status, { last_error: msg.message });
+        updateHud();
+      }
+    };
+  }
+
+  /* ---------------- 连接守护 ---------------- */
+
+  const warn = document.getElementById("link-warn");
+
+  setInterval(() => {
+    if (PREVIEW) return;
+    // 服务端每 5 秒发一次 ping。12 秒没任何消息 = 连接已经僵死，主动重连。
+    // 只看 onclose 不够：CEF 被挂起后连接可能既不关也不报错。
+    if (state.connected && Date.now() - lastMsgAt > 12000) {
+      state.connected = false;
+      try { if (ws) ws.close(); } catch (e) {}
+      connect();
+    }
+    if (state.connected) {
+      downSince = 0;
+      warn.classList.remove("on");
+    } else {
+      if (!downSince) downSince = Date.now();
+      // 短暂抖动不打扰，断超过 8 秒才提示
+      if (Date.now() - downSince > 8000) warn.classList.add("on");
+    }
+  }, 2000);
+
+  /* ---------------- 启动 ---------------- */
+
+  applyScale();
+
+  if (PREVIEW) {
+    // 预排版模式：不连服务器，用固定文本调字体/描边/位置
+    hud.classList.toggle("on", DEBUG);
+    PREVIEW_LINES.forEach((line) => addLine(line, { silent: true }));
+  } else {
+    connect();
+  }
+
+  if (DEBUG) {
+    // 调试页直接内联一份默认值，避免服务器没起来时白屏
+    updateHud();
+  }
+})();
+</script>
+</body>
+</html>

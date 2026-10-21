@@ -1,0 +1,5 @@
+# 真实日语识别引擎（ONNX Runtime，纯 CPU 推理，无需 CUDA）
+sherpa-onnx>=1.10
+
+# 可选：模型下载工具（走 HuggingFace）
+# huggingface-hub>=0.23
