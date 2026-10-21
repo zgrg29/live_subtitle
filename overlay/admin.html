@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LiveSub 设置</title>
+<title>LiveSub 設定</title>
 <style>
   :root {
     --bg: #14181d; --fg: #e6edf3; --muted: #8b98a5; --line: #26303a;
@@ -12,7 +12,7 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg);
-         font: 14px/1.5 "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif; }
+         font: 14px/1.6 "Yu Gothic UI", "Meiryo", "Noto Sans JP", "Microsoft YaHei", system-ui, sans-serif; }
   header { display: flex; align-items: center; gap: 16px; padding: 10px 18px;
            border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header h1 { font-size: 15px; margin: 0; font-weight: 600; }
@@ -24,7 +24,7 @@
   main { display: flex; gap: 18px; padding: 18px; align-items: flex-start; }
   .hidden { display: none !important; }
 
-  /* 预览 */
+  /* プレビュー */
   .preview-box { position: relative; width: 640px; flex: none; }
   .preview-frame { position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden;
                    background: #0a0d10 repeating-conic-gradient(#161b21 0% 25%, #0f1418 0% 50%) 50% / 24px 24px;
@@ -33,7 +33,7 @@
                           border: 0; transform-origin: top left; }
   .preview-note { color: var(--muted); font-size: 12px; margin-top: 8px; }
 
-  /* 表单 */
+  /* フォーム */
   .form { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
           gap: 12px 18px; background: var(--panel); border: 1px solid var(--line);
           border-radius: 12px; padding: 16px; }
@@ -56,7 +56,7 @@
   .status { font-size: 12px; color: var(--muted); }
   .status.ok { color: var(--ok); } .status.err { color: var(--danger); }
 
-  /* 词典 */
+  /* 辞書 */
   #panel-glossary { display: block; width: 100%; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
   .card h2 { font-size: 14px; margin: 0 0 4px; }
@@ -81,53 +81,53 @@
 <body>
 
 <header>
-  <h1>LiveSub 设置</h1>
+  <h1>LiveSub 設定</h1>
   <div class="tabs">
-    <button id="tab-style" class="on" data-panel="panel-style">样式</button>
-    <button id="tab-glossary" data-panel="panel-glossary">词典</button>
+    <button id="tab-style" class="on" data-panel="panel-style">スタイル</button>
+    <button id="tab-glossary" data-panel="panel-glossary">辞書</button>
   </div>
   <div class="spacer"></div>
   <span class="status" id="top-status"></span>
-  <button class="ghost" onclick="window.open('/overlay?preview=1','_blank')">打开字幕页</button>
+  <button class="ghost" onclick="window.open('/overlay?preview=1','_blank')">字幕ページを開く</button>
 </header>
 
 <main>
-  <!-- ================= 样式 ================= -->
+  <!-- ================= スタイル ================= -->
   <section id="panel-style" style="display:contents">
     <div class="preview-box">
       <div class="preview-frame" id="frame-box">
         <iframe id="pv" src="/overlay?preview=1"></iframe>
       </div>
-      <div class="preview-note">预览是 1920×1080 等比缩放；OBS 里按 1920×1080 添加即可。</div>
+      <div class="preview-note">プレビューは 1920×1080 を等比縮小したものです。OBS では 1920×1080 で追加してください。</div>
     </div>
 
     <div class="form">
       <div class="field" style="grid-column: 1 / -1">
-        <label>字体（系统里已安装的字体名，可写多个用逗号分隔）</label>
+        <label>フォント（インストール済みのフォント名。カンマ区切りで複数指定できます）</label>
         <input type="text" id="font_family">
       </div>
 
       <div class="field">
-        <label>中文字号</label>
+        <label>中国語の文字サイズ</label>
         <div class="row"><input type="range" id="zh_size" min="12" max="140" step="1"><output id="zh_size_o"></output></div>
       </div>
       <div class="field">
-        <label>日文字号</label>
+        <label>日本語の文字サイズ</label>
         <div class="row"><input type="range" id="ja_size" min="10" max="120" step="1"><output id="ja_size_o"></output></div>
       </div>
 
       <div class="field">
-        <label>中文字色</label>
+        <label>中国語の文字色</label>
         <input type="color" id="zh_color">
       </div>
       <div class="field">
-        <label>日文字色</label>
+        <label>日本語の文字色</label>
         <input type="color" id="ja_color">
       </div>
 
       <div class="field">
-        <label>描边</label>
-        <div class="check"><input type="checkbox" id="outline_on"><span>启用描边</span></div>
+        <label>縁取り</label>
+        <div class="check"><input type="checkbox" id="outline_on"><span>縁取りを有効にする</span></div>
         <div class="row" style="margin-top:6px">
           <input type="color" id="outline_color" style="width:52px;flex:none">
           <input type="range" id="outline_width" min="0" max="12" step="1">
@@ -135,8 +135,8 @@
         </div>
       </div>
       <div class="field">
-        <label>背景板（半透明长方形）</label>
-        <div class="check"><input type="checkbox" id="bg_on"><span>启用背景</span></div>
+        <label>背景（半透明の長方形）</label>
+        <div class="check"><input type="checkbox" id="bg_on"><span>背景を有効にする</span></div>
         <div class="row" style="margin-top:6px">
           <input type="color" id="bg_color" style="width:52px;flex:none">
           <input type="range" id="bg_alpha" min="0" max="100" step="1">
@@ -145,76 +145,76 @@
       </div>
 
       <div class="field">
-        <label>位置</label>
-        <select id="position"><option value="bottom">底部</option><option value="top">顶部</option></select>
+        <label>表示位置</label>
+        <select id="position"><option value="bottom">下</option><option value="top">上</option></select>
       </div>
       <div class="field">
-        <label>距边缘（%）</label>
+        <label>端からの距離（%）</label>
         <div class="row"><input type="range" id="margin_percent" min="0" max="45" step="1"><output id="margin_percent_o"></output></div>
       </div>
       <div class="field">
-        <label>同时显示几行</label>
+        <label>同時に表示する行数</label>
         <div class="row"><input type="range" id="max_lines" min="1" max="6" step="1"><output id="max_lines_o"></output></div>
       </div>
       <div class="field">
-        <label>是否显示日语原文</label>
-        <div class="check"><input type="checkbox" id="bilingual"><span>显示日文</span></div>
+        <label>日本語の原文を表示する</label>
+        <div class="check"><input type="checkbox" id="bilingual"><span>日本語を表示</span></div>
       </div>
 
       <div class="field" style="grid-column: 1 / -1">
         <div class="actions">
-          <button class="primary" id="save-style">保存并应用</button>
-          <button class="ghost" id="reset-style">重新载入</button>
+          <button class="primary" id="save-style">保存して適用</button>
+          <button class="ghost" id="reset-style">再読み込み</button>
           <span class="status" id="style-status"></span>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ================= 词典 ================= -->
+  <!-- ================= 辞書 ================= -->
   <section id="panel-glossary" class="hidden">
     <div class="card">
-      <h2>固定表达（整句）</h2>
-      <p class="hint">整句完全匹配才生效（忽略标点、空格、结尾拖音）。适合寒暄、直播套话。</p>
+      <h2>定型フレーズ（文全体）</h2>
+      <p class="hint">文全体が完全一致したときだけ有効です（句読点・空白・語尾の伸ばしは無視）。挨拶や配信の決まり文句に向いています。</p>
       <table>
-        <thead><tr><th style="width:34%">日文</th><th style="width:30%">中文</th><th>说明</th><th></th></tr></thead>
+        <thead><tr><th style="width:34%">日本語</th><th style="width:30%">中国語</th><th>メモ</th><th></th></tr></thead>
         <tbody id="phrases-body"></tbody>
       </table>
       <div class="toolbar">
-        <button class="ghost" id="add-phrase">+ 加一条</button>
+        <button class="ghost" id="add-phrase">＋ 追加</button>
         <span class="status" id="phrase-count"></span>
       </div>
     </div>
 
     <div class="card">
-      <h2>术语</h2>
+      <h2>用語</h2>
       <p class="hint">
-        <b>pre</b>：译前把日文词换成中文再送模型（片假名专名、游戏名、食物名）。<br>
-        <b>post</b>：正常翻译，译后把「错误写法」换成正确词（只在这句里出现该词时生效）；错误写法多个用 <code>|</code> 分隔。
+        <b>pre</b>：翻訳前に日本語の語を中国語へ置き換えてからモデルに渡します（カタカナの固有名詞・ゲーム名・食べ物）。<br>
+        <b>post</b>：通常どおり翻訳し、訳文の「誤訳パターン」を正しい語に置換します（原文にその語があるときだけ有効）。複数指定は <code>|</code> 区切り。
       </p>
       <table>
-        <thead><tr><th style="width:26%">日文</th><th style="width:22%">中文</th><th style="width:11%">模式</th><th style="width:22%">错误写法</th><th>说明</th><th></th></tr></thead>
+        <thead><tr><th style="width:26%">日本語</th><th style="width:22%">中国語</th><th style="width:11%">モード</th><th style="width:22%">誤訳パターン</th><th>メモ</th><th></th></tr></thead>
         <tbody id="terms-body"></tbody>
       </table>
       <div class="toolbar">
-        <button class="ghost" id="add-term">+ 加一条</button>
+        <button class="ghost" id="add-term">＋ 追加</button>
         <span class="status" id="term-count"></span>
       </div>
     </div>
 
     <div class="card">
-      <h2>试译</h2>
-      <p class="hint">用当前词典翻一句，验证刚加的词有没有生效。</p>
+      <h2>試し翻訳</h2>
+      <p class="hint">現在の辞書で 1 文を翻訳し、追加した語が効いているか確認できます。</p>
       <div class="try">
         <input id="try-in" placeholder="例：こんばんはー、今日も配信やっていきます。">
-        <button class="primary" id="try-btn">翻一下</button>
+        <button class="primary" id="try-btn">翻訳する</button>
       </div>
       <div class="try-out" id="try-out"></div>
     </div>
 
     <div class="toolbar">
-      <button class="primary" id="save-glossary">保存词典并热加载</button>
-      <button class="ghost" id="reload-glossary">放弃修改，重新载入</button>
+      <button class="primary" id="save-glossary">辞書を保存して即時反映</button>
+      <button class="ghost" id="reload-glossary">変更を破棄して再読み込み</button>
       <span class="status" id="glossary-status"></span>
     </div>
     <p class="warn" id="glossary-warn"></p>
@@ -241,7 +241,7 @@
     el.className = "status" + (ok === true ? " ok" : ok === false ? " err" : "");
   }
 
-  /* ---------------- 标签页 ---------------- */
+  /* ---------------- タブ ---------------- */
   document.querySelectorAll(".tabs button").forEach((btn) => {
     btn.onclick = () => {
       document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b === btn));
@@ -251,7 +251,7 @@
     };
   });
 
-  /* ---------------- 预览缩放 ---------------- */
+  /* ---------------- プレビューの拡大縮小 ---------------- */
   function fitPreview() {
     const box = $("frame-box");
     const scale = box.clientWidth / 1920;
@@ -259,7 +259,7 @@
   }
   window.addEventListener("resize", fitPreview);
 
-  /* ---------------- 颜色/背景 ---------------- */
+  /* ---------------- 色／背景 ---------------- */
   function parseBg(str) {
     if (!str || str === "transparent" || str === "none") return { on: false, color: "#000000", alpha: 0.35 };
     const m = /rgba?\(([^)]+)\)/.exec(str);
@@ -279,7 +279,7 @@
            parseInt(c.slice(5, 7), 16) + "," + a + ")";
   }
 
-  /* ---------------- 表单 → 配置 ---------------- */
+  /* ---------------- フォーム → 設定 ---------------- */
   function collect() {
     const cfg = Object.assign({}, state.cfg || {});
     cfg.font_family = $("font_family").value;
@@ -328,7 +328,7 @@
     frame.contentWindow.postMessage({ type: "preview-config", config: collect() }, location.origin);
   }
 
-  // 任何输入变化都即时预览
+  // 入力が変わるたびにプレビューへ反映
   document.querySelectorAll("#panel-style input, #panel-style select").forEach((el) => {
     el.addEventListener("input", () => {
       ["zh_size", "ja_size", "outline_width", "margin_percent", "max_lines"].forEach((k) => {
@@ -340,14 +340,14 @@
     });
   });
 
-  /* ---------------- 加载/保存样式 ---------------- */
+  /* ---------------- スタイルの読み込み／保存 ---------------- */
   async function loadConfig() {
     try {
       fill(await api("/api/config"));
       pushPreview();
       setStatus($("style-status"), "");
     } catch (e) {
-      setStatus($("style-status"), "读取配置失败：" + e.message, false);
+      setStatus($("style-status"), "設定の読み込みに失敗しました：" + e.message, false);
     }
   }
 
@@ -362,9 +362,9 @@
       });
       fill(res.config);
       pushPreview();
-      setStatus($("style-status"), "已保存，OBS 里的字幕会立刻更新", true);
+      setStatus($("style-status"), "保存しました。OBS の字幕にすぐ反映されます", true);
     } catch (e) {
-      setStatus($("style-status"), "保存失败：" + e.message, false);
+      setStatus($("style-status"), "保存に失敗しました：" + e.message, false);
     } finally {
       btn.disabled = false;
     }
@@ -372,7 +372,7 @@
 
   $("reset-style").onclick = () => loadConfig();
 
-  /* ---------------- 词典 ---------------- */
+  /* ---------------- 辞書 ---------------- */
   function rowInput(value, placeholder, onInput, width) {
     const input = document.createElement("input");
     input.value = value || "";
@@ -392,18 +392,18 @@
       const td2 = document.createElement("td");
       td2.appendChild(rowInput(row.zh, "晚上好", (v) => (row.zh = v)));
       const td3 = document.createElement("td");
-      td3.appendChild(rowInput(row.note, "说明（可空）", (v) => (row.note = v)));
+      td3.appendChild(rowInput(row.note, "メモ（空欄可）", (v) => (row.note = v)));
       const td4 = document.createElement("td");
       td4.className = "del";
       const del = document.createElement("button");
       del.textContent = "×";
-      del.title = "删除这一行";
+      del.title = "この行を削除";
       del.onclick = () => { state.phrases.splice(i, 1); renderPhrases(); };
       td4.appendChild(del);
       tr.append(td1, td2, td3, td4);
       body.appendChild(tr);
     });
-    $("phrase-count").textContent = state.phrases.length + " 条";
+    $("phrase-count").textContent = state.phrases.length + " 件";
   }
 
   function renderTerms() {
@@ -428,23 +428,23 @@
       tdMode.appendChild(sel);
 
       const tdWrong = document.createElement("td");
-      tdWrong.appendChild(rowInput(row.wrong, "仅 post：发送|发货", (v) => (row.wrong = v)));
+      tdWrong.appendChild(rowInput(row.wrong, "post のみ：发送|发货", (v) => (row.wrong = v)));
 
       const tdNote = document.createElement("td");
-      tdNote.appendChild(rowInput(row.note, "说明（可空）", (v) => (row.note = v)));
+      tdNote.appendChild(rowInput(row.note, "メモ（空欄可）", (v) => (row.note = v)));
 
       const tdDel = document.createElement("td");
       tdDel.className = "del";
       const del = document.createElement("button");
       del.textContent = "×";
-      del.title = "删除这一行";
+      del.title = "この行を削除";
       del.onclick = () => { state.terms.splice(i, 1); renderTerms(); };
       tdDel.appendChild(del);
 
       tr.append(tdJa, tdZh, tdMode, tdWrong, tdNote, tdDel);
       body.appendChild(tr);
     });
-    $("term-count").textContent = state.terms.length + " 条";
+    $("term-count").textContent = state.terms.length + " 件";
   }
 
   async function loadGlossary() {
@@ -456,7 +456,7 @@
       setStatus($("glossary-status"), "");
       $("glossary-warn").textContent = "";
     } catch (e) {
-      setStatus($("glossary-status"), "读取词典失败：" + e.message, false);
+      setStatus($("glossary-status"), "辞書の読み込みに失敗しました：" + e.message, false);
     }
   }
 
@@ -485,10 +485,10 @@
       state.phrases = res.phrases || [];
       state.terms = res.terms || [];
       renderPhrases(); renderTerms();
-      setStatus($("glossary-status"), "已保存并热加载（" + state.phrases.length + " 句 / " + state.terms.length + " 词）", true);
-      $("glossary-warn").textContent = "写入位置：" + (res.written || []).join("，");
+      setStatus($("glossary-status"), "保存して即時反映しました（" + state.phrases.length + " 文 / " + state.terms.length + " 語）", true);
+      $("glossary-warn").textContent = "書き込み先：" + (res.written || []).join("、");
     } catch (e) {
-      setStatus($("glossary-status"), "保存失败：" + e.message, false);
+      setStatus($("glossary-status"), "保存に失敗しました：" + e.message, false);
     } finally {
       btn.disabled = false;
     }
@@ -509,7 +509,7 @@
       const ms = Math.round(performance.now() - t0);
       $("try-out").innerHTML = "<b>" + escapeHtml(res.zh || "（空）") + "</b>　" + ms + " ms";
     } catch (e) {
-      $("try-out").textContent = "翻译失败：" + e.message;
+      $("try-out").textContent = "翻訳に失敗しました：" + e.message;
     }
   };
   $("try-in").addEventListener("keydown", (e) => { if (e.key === "Enter") $("try-btn").click(); });
@@ -518,7 +518,7 @@
     return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
-  /* ---------------- 启动 ---------------- */
+  /* ---------------- 起動 ---------------- */
   $("pv").addEventListener("load", () => { fitPreview(); pushPreview(); });
   fitPreview();
   loadConfig();

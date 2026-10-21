@@ -54,9 +54,9 @@ def resolve_input_device(device: str) -> int | None:
         try:
             default = sd.query_devices(kind="input")
         except Exception as exc:  # 没有可用输入设备
-            raise RuntimeError(f"找不到可用的麦克风：{exc}") from exc
+            raise RuntimeError(f"使用可能なマイクが見つかりません：{exc}") from exc
         if int(default["max_input_channels"]) <= 0:
-            raise RuntimeError("系统默认设备不是输入设备，请在 config.toml 里指定麦克风")
+            raise RuntimeError("システム既定のデバイスが入力デバイスではありません。config.toml でマイクを指定してください")
         return None
 
     needle = device.strip().lower()
@@ -67,7 +67,7 @@ def resolve_input_device(device: str) -> int | None:
     ]
     if not matches:
         names = "\n".join(f"  [{i}] {n}" for i, n, _ in list_input_devices())
-        raise RuntimeError(f"没找到名称包含 {device!r} 的麦克风。可用设备：\n{names}")
+        raise RuntimeError(f"名前に {device!r} を含むマイクが見つかりません。使用可能なデバイス：\n{names}")
     return matches[0][0]
 
 
@@ -84,7 +84,7 @@ class MicSource:
         try:
             import sounddevice as sd
         except Exception as exc:  # pragma: no cover - 依赖缺失时给清晰提示
-            raise RuntimeError("缺少 sounddevice，请先 pip install -r requirements.txt") from exc
+            raise RuntimeError("sounddevice が見つかりません。pip install -r requirements.txt を実行してください") from exc
 
         self._sd = sd
         self.sample_rate = sample_rate
@@ -133,7 +133,8 @@ class MicSource:
                 # 不检测的话这里会永远空转，界面停在最后一句且"看起来一切正常"。
                 if time.monotonic() - self._last_cb > 5.0:
                     raise RuntimeError(
-                        "麦克风超过 5 秒没有音频数据（设备可能被拔出、休眠或被其他程序独占）"
+                        "マイクから 5 秒以上音声データが届きません"
+                        "（デバイスが抜かれた／スリープした／他のアプリが占有している可能性があります）"
                     )
                 continue
 
@@ -162,7 +163,7 @@ class WavSource:
     def _read(self) -> np.ndarray:
         with wave.open(str(self.path), "rb") as wf:
             if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
-                raise RuntimeError("只支持 16-bit 单声道 WAV，请先转换")
+                raise RuntimeError("16-bit モノラルの WAV のみ対応しています。変換してから実行してください")
             rate = wf.getframerate()
             raw = wf.readframes(wf.getnframes())
         data = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0

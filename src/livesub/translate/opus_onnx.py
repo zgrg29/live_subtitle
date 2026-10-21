@@ -37,7 +37,7 @@ class OpusOnnxTranslator:
             from transformers import MarianTokenizer
         except Exception as exc:
             raise RuntimeError(
-                "缺少翻译依赖，请执行：pip install -r requirements-mt.txt"
+                "翻訳の依存関係がありません。pip install -r requirements-mt.txt を実行してください"
             ) from exc
 
         self._dir = Path(model_dir)
@@ -45,7 +45,7 @@ class OpusOnnxTranslator:
             self._dir = data_dir() / self._dir
         for name in ("encoder_model.onnx", "decoder_model.onnx", "decoder_with_past_model.onnx"):
             if not (self._dir / name).exists():
-                raise FileNotFoundError(f"ONNX 模型不完整，缺少 {name}：{self._dir}")
+                raise FileNotFoundError(f"ONNX モデルが不完全です。不足：{name}（{self._dir}）")
 
         cfg = json.loads((self._dir / "config.json").read_text(encoding="utf-8"))
         self._start = int(cfg.get("decoder_start_token_id") or 65000)

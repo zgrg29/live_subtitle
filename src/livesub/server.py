@@ -59,7 +59,7 @@ def create_app(runtime: Runtime) -> FastAPI:
     @app.get("/overlay")
     async def overlay() -> Response:
         if not overlay_file.exists():
-            return JSONResponse({"error": f"缺少字幕页文件：{overlay_file}"}, status_code=500)
+            return JSONResponse({"error": f"字幕ページのファイルがありません：{overlay_file}"}, status_code=500)
         return FileResponse(
             overlay_file,
             media_type="text/html; charset=utf-8",
@@ -73,7 +73,7 @@ def create_app(runtime: Runtime) -> FastAPI:
     @app.get("/admin")
     async def admin() -> Response:
         if not admin_file.exists():
-            return JSONResponse({"error": f"缺少设置页文件：{admin_file}"}, status_code=500)
+            return JSONResponse({"error": f"設定ページのファイルがありません：{admin_file}"}, status_code=500)
         return FileResponse(
             admin_file,
             media_type="text/html; charset=utf-8",
@@ -91,7 +91,7 @@ def create_app(runtime: Runtime) -> FastAPI:
         try:
             save_section(runtime.config_path or CONFIG_FILENAME, "overlay", values)
         except Exception as exc:  # 写盘失败也要把内存里的改动告诉用户
-            return JSONResponse({"error": f"写入 config.toml 失败：{exc}"}, status_code=500)
+            return JSONResponse({"error": f"config.toml への書き込みに失敗しました：{exc}"}, status_code=500)
         runtime.publisher.publish({"type": "config", "config": values})
         return {"ok": True, "config": values}
 
@@ -110,7 +110,7 @@ def create_app(runtime: Runtime) -> FastAPI:
                 list(payload.get("terms") or []),
             )
         except Exception as exc:
-            return JSONResponse({"error": f"写入词典失败：{exc}"}, status_code=500)
+            return JSONResponse({"error": f"辞書の書き込みに失敗しました：{exc}"}, status_code=500)
         runtime.pipeline.reload_glossary()
         glossary = load_glossary(runtime.cfg.glossary.dir)
         return {
@@ -131,7 +131,7 @@ def create_app(runtime: Runtime) -> FastAPI:
         except Exception as exc:
             # 常见于用 --wav 跑完一遍之后：引擎已经 close 了
             return JSONResponse(
-                {"error": f"翻译引擎当前不可用（{type(exc).__name__}）：{exc}"},
+                {"error": f"翻訳エンジンが現在使用できません（{type(exc).__name__}）：{exc}"},
                 status_code=503,
             )
         return {"ok": True, "zh": zh}

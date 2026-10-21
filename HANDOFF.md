@@ -1,14 +1,18 @@
 # 交接说明（下次从这里继续）
 
-> 最后更新：2026-10-21 · 版本 **0.3.1**（M2.3 断句合并 + M2.2 术语表/补标点/评测 + 图形设置页）
+> 最后更新：2026-10-21 · 版本 **0.4.0**（L10N 日语化 + M2.6 词典扩容；底层仍是 M2.3 断句合并 + M2.2 术语表/补标点 + 图形设置页）
 
 ## 一句话状态
 
 **实时日语→中文字幕已经完整可用**：麦克风 → VAD 切句 → 日语识别 → 断句合并 → 中文翻译 → OBS 上屏。
-绿色版在 `dist\LiveSub-0.3.1\`（602MB，含两个模型），压缩包 `dist\LiveSub-0.3.1-win64.zip`。
+绿色版在 `dist\LiveSub-0.4.0\`（602MB，含两个模型），压缩包 `dist\LiveSub-0.4.0-win64.zip`。
 
-**0.3.1 的关键变化**：程序里内置了图形设置页 `/admin`（样式实时预览 + 词典增删改热加载），
-词典扩到 137 条固定表达 + 88 条术语，命令行横幅里会直接打印设置页地址。
+**0.4.0 的关键变化**：用户可见的文本全部日语化；词典扩到 **292 条固定表达 + 155 条术语**；
+README 重写为日语用户手册，开发进度/质量数据搬到 `docs/PROGRESS.md`。
+0.3.1 已有的图形设置页 `/admin`、译前补标点、译文清洗保持不变。
+
+面向用户的总览在 [README.md](README.md)（日语），进度/质量数据在
+[docs/PROGRESS.md](docs/PROGRESS.md)（中文）。
 
 实测（Intel N97，4 个能效核）：ASR 140–380ms、MT **45–103ms**、短句端到端 **p50 0.8–1.2 秒**。
 5 条长测试音频：最终字幕从 12 行降到 8 行，整句 CER **11.1% → 4.6%**
@@ -37,7 +41,7 @@ $env:PYTHONPATH=''   # 已装 .pth，不需要 PYTHONPATH
 # 对照旧行为：
 .\.venv\Scripts\python.exe tools\eval_pipeline.py --wav-dir models/test_wavs --no-merge --end-silence 420
 
-# 4) 全链路（真实识别 + 真实翻译），会打印日语和中文；[合并 N 段] 表示发生了合并
+# 4) 全链路（真实识别 + 真实翻译），会打印日语和中文；[統合 N 断片] 表示发生了合并
 .\.venv\Scripts\python.exe -m livesub selftest --wav models/test_wavs/3.wav --real
 
 # 5) 翻译质量 A/B：60 句评测集，几十秒跑完，报告写到 logs/eval/
@@ -123,7 +127,7 @@ Start-Process 'D:\live_subtitle\dist\LiveSub\LiveSub.exe' -ArgumentList '--port'
 | 名词结尾、动词中顿（如 `舞い`） | 仍会漏判成两行；需要更强的句尾模型或标点模型 |
 | 翻译质量盲评 | 有 60 句固定评测集（文本）；**真人麦克风的真实字幕还没进评测集**，对 60 句有过拟合风险 |
 | 食物名 / 专有名词 | `のり弁当` 这类仍不稳（pre 注入会变成"我做了海参/海苔"）；需要更多真实错例 |
-| 术语表 / 名词词典 | ✅ 第一版（48 条固定表达 + 28 条术语）；词条都是"实测翻错才加"的 |
+| 术语表 / 名词词典 | ✅ 292 条固定表达 + 155 条术语（M2.6 扩容 + 去重）；词条都是"实测翻错才加"的 |
 | ASR 侧热词 / 替换 | 未做。`sherpa-onnx` 支持 hotwords，但要 `modified_beam_search`，得先量延迟 |
 | 敏感词 / SRT 导出 | 未实现（M3） |
 | 代码签名 | 未做；首次运行弹「未知发布者」 |
@@ -131,22 +135,24 @@ Start-Process 'D:\live_subtitle\dist\LiveSub\LiveSub.exe' -ArgumentList '--port'
 
 ## 下一步（按顺序）
 
-**下一轮的第一件事已经定了：日语化。** 这个软件面向日本主播，用户能看到的文本要全部改成日语。
+**日语化已完成（L10N，2026-10-21）**：终端、`/admin`、字幕页 HUD、`config.toml` 注释、
+`起動.bat`、绿色版 `使い方.txt`、README、release notes 全部日语；开发文档保留中文。
+没有引入 i18n 切换层——产品只面向日本用户，单语比两套文案更好维护。
 
-1. **日语化（用户明确要求，优先级最高）**
-   - 范围：程序内所有面向用户的文本——控制台横幅、`/admin` 设置页全部文案、字幕页调试 HUD、
-     `使用说明.txt`、release notes；
-   - GitHub README 改成**给日本用户看的说明书**（安装 / OBS / 设置 / 加词），不要再放开发进度；
-   - 开发日志、进度、ADR 这些**保留中文**，从 README 里搬出去（`docs/` 下）；
-   - 实现建议：加一层 i18n（`locales/ja.json` + `zh.json`），默认 `ja`，`config.toml` 可切。
-2. **发布 0.3.1**：`git push origin main` + `git push origin v0.3.1`，
-   然后建 release（附件 `dist\LiveSub-0.3.1-win64.zip`）；0.3.0 那个包是旧版（无设置页），建议删掉。
-3. **ASR 侧**（唯一没动过的层）：`のり弁当`、`唐揚げ` 先看 `ja` 原文；`ja` 就错就试
+**绿色版已重打**（2026-10-21）：`dist\LiveSub-0.4.0`（602MB，日语 UI），
+zip `dist\LiveSub-0.4.0-win64.zip`（373.0MB），SHA256
+`7C4D30D870F92BC8A9E605AC4BA08788661F2C6655152D7F87EB1FCB5A53B3A6`，
+`dist\RELEASE_BODY.md` 已同步为日语。剩下的是 push / 建 release。
+
+1. **发布 0.4.0**：`git push origin main` + `git push origin v0.4.0`，
+   然后建 release（附件 `dist\LiveSub-0.4.0-win64.zip`，正文用 `dist\RELEASE_BODY.md`）；
+   0.3.0 / 0.3.1 的包是旧版，建议归档或删掉，只保留 0.4.0。
+2. **ASR 侧**（唯一没动过的层）：`のり弁当`、`唐揚げ` 先看 `ja` 原文；`ja` 就错就试
    `sherpa-onnx` 的 hotwords（要 `modified_beam_search`，先量延迟）。
    **ASR 的 CER 是播音腔测的，真人主播会更差**，这块可能是下一个真金矿。
-4. **真人 20–50 句断句基线**：用主播语速录一段，跑 `selftest --wav` / `eval_pipeline.py`。
-5. **OBS 联动 + 看门狗**（M3）：`GetStats` 丢帧 → 降级；场景联动；一键隐藏热键。
-6. **签名与分发**（M4 收尾）：602MB 的绿色版偏大，考虑模型按需下载的瘦身版。
+3. **真人 20–50 句断句基线**：用主播语速录一段，跑 `selftest --wav` / `eval_pipeline.py`。
+4. **OBS 联动 + 看门狗**（M3）：`GetStats` 丢帧 → 降级；场景联动；一键隐藏热键。
+5. **签名与分发**（M4 收尾）：602MB 的绿色版偏大，考虑模型按需下载的瘦身版。
 
 **已经试过、确认无效的路**（别重复走）：
 - 译前把口语缩约规范化成书面形：±0.00；

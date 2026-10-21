@@ -30,7 +30,7 @@ class SherpaOfflineASR:
             import sherpa_onnx
         except Exception as exc:
             raise RuntimeError(
-                "缺少 sherpa-onnx，请先执行：pip install -r requirements-asr.txt"
+                "sherpa-onnx が見つかりません。pip install -r requirements-asr.txt を実行してください"
             ) from exc
 
         self._dir = Path(model_dir)
@@ -38,14 +38,14 @@ class SherpaOfflineASR:
             # 用 data_dir() 而不是 cwd：和 factory/config 的解析规则保持一致
             self._dir = data_dir() / self._dir
         if not self._dir.exists():
-            raise FileNotFoundError(f"模型目录不存在：{self._dir}")
+            raise FileNotFoundError(f"モデルディレクトリがありません：{self._dir}")
 
         encoder = _pick(self._dir, "encoder")
         decoder = _pick(self._dir, "decoder")
         joiner = _pick(self._dir, "joiner")
         tokens = self._dir / "tokens.txt"
         if not tokens.exists():
-            raise FileNotFoundError(f"缺少 tokens.txt：{self._dir}")
+            raise FileNotFoundError(f"tokens.txt がありません：{self._dir}")
 
         self.name = f"sherpa:{self._dir.name}"
         self._lead_pad_ms = max(0, int(lead_pad_ms))
@@ -95,4 +95,4 @@ def _pick(model_dir: Path, stem: str) -> Path:
         return int8[0]
     if candidates:
         return candidates[0]
-    raise FileNotFoundError(f"{model_dir} 里找不到 {stem}*.onnx")
+    raise FileNotFoundError(f"{model_dir} に {stem}*.onnx が見つかりません")

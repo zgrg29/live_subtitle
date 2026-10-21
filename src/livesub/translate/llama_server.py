@@ -43,9 +43,9 @@ class LlamaServerTranslator:
         self._model = _resolve(model_path)
         self._exe = _resolve(server_exe)
         if not self._model.exists():
-            raise FileNotFoundError(f"翻译模型不存在：{self._model}")
+            raise FileNotFoundError(f"翻訳モデルがありません：{self._model}")
         if not self._exe.exists():
-            raise FileNotFoundError(f"缺少 llama-server：{self._exe}")
+            raise FileNotFoundError(f"llama-server がありません：{self._exe}")
 
         self._port = _free_port()
         self._base = f"http://127.0.0.1:{self._port}"
@@ -78,7 +78,7 @@ class LlamaServerTranslator:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             if self._proc.poll() is not None:
-                raise RuntimeError(f"llama-server 启动失败（退出码 {self._proc.returncode}）")
+                raise RuntimeError(f"llama-server の起動に失敗しました（終了コード {self._proc.returncode}）")
             try:
                 with urllib.request.urlopen(f"{self._base}/health", timeout=2) as rsp:
                     if rsp.status == 200:
@@ -86,7 +86,7 @@ class LlamaServerTranslator:
             except (urllib.error.URLError, ConnectionError, TimeoutError):
                 pass
             time.sleep(0.3)
-        raise TimeoutError(f"llama-server {timeout_s:.0f} 秒内没有就绪")
+        raise TimeoutError(f"llama-server が {timeout_s:.0f} 秒以内に準備できませんでした")
 
     def close(self) -> None:
         proc = getattr(self, "_proc", None)
@@ -129,7 +129,7 @@ class LlamaServerTranslator:
                 with urllib.request.urlopen(request, timeout=120) as rsp:
                     body = json.loads(rsp.read().decode("utf-8"))
             except (urllib.error.URLError, TimeoutError) as exc:
-                raise RuntimeError(f"翻译服务无响应：{exc}") from exc
+                raise RuntimeError(f"翻訳サービスが応答しません：{exc}") from exc
         choice = (body.get("choices") or [{}])[0]
         content = ((choice.get("message") or {}).get("content") or "").strip()
         return _clean(content)

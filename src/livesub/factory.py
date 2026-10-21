@@ -56,7 +56,7 @@ def build_asr(cfg: Config, force_mock: bool = False) -> ASR:
             _LAST_ASR_ERROR[0] = f"{type(exc).__name__}: {exc}"
             return EchoASR()
 
-    raise ValueError(f"未知的 ASR 引擎：{engine}")
+    raise ValueError(f"不明な ASR エンジン：{engine}")
 
 
 def build_mt(cfg: Config, force_mock: bool = False) -> Translator:
@@ -116,7 +116,7 @@ def build_mt(cfg: Config, force_mock: bool = False) -> Translator:
                 raise
             return NullTranslator()
 
-    raise ValueError(f"未知的翻译引擎：{engine}（支持 qwen / m2m100 / none / echo）")
+    raise ValueError(f"不明な翻訳エンジン：{engine}（qwen / m2m100 / none / echo に対応）")
 
 
 def _wrap_glossary(cfg: Config, mt: Translator) -> Translator:

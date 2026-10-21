@@ -26,11 +26,12 @@ DEMO_LINES = [
 class EchoASR:
     """回显：只说"识别到多长的语音"，用来确认音频链路通不通。"""
 
-    name = "echo(未加载模型)"
+    name = "echo(モデル未読込)"
+    is_demo = True
 
     def transcribe(self, audio: np.ndarray, sample_rate: int) -> AsrResult:
         seconds = len(audio) / sample_rate
-        return AsrResult(text=f"（日语音频 {seconds:.1f} 秒，未加载识别模型）")
+        return AsrResult(text=f"（日本語音声 {seconds:.1f} 秒・認識モデル未読込）")
 
     def close(self) -> None:
         return None
@@ -39,7 +40,8 @@ class EchoASR:
 class ScriptedASR:
     """按顺序吐预设日语，用于 demo 和自测。"""
 
-    name = "demo(预设台词)"
+    name = "demo(台本)"
+    is_demo = True
 
     def __init__(self, lines: list[str] | None = None) -> None:
         self._lines = cycle(lines or DEMO_LINES)

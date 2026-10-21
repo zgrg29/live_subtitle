@@ -1,78 +1,78 @@
-# LiveSub 配置。改完重启程序生效。
-# 全部留空/默认即可运行；只有换麦克风或调样式时才需要动这里。
+# LiveSub の設定ファイルです。変更したらプログラムを再起動してください。
+# すべて既定値のままで動きます。マイクや見た目を変えたいときだけ編集してください。
 
 [audio]
-# 留空=系统默认麦克风；填设备名的一部分即可匹配
+# 空欄＝システム既定のマイク。名前の一部を書けば一致するマイクを使います
 device = ""
 sample_rate = 16000
 block_ms = 20
-# 音量增益，麦克风太小声可以调到 1.5~2.0
+# 入力ゲイン。マイクが小さいときは 1.5〜2.0 に上げます
 gain = 1.0
 
 [vad]
 threshold = 0.008
 noise_ratio = 2.5
-# 越大越能挡掉咳嗽/碰麦的杂音
+# 大きくするほど咳・マイク叩きなどの雑音を弾きます
 min_speech_ms = 160
-# 静音多久算这句话结束；切碎了由 [segment] 的合并兜底
+# 無音が何 ms 続いたら発話終了とみなすか。区切りは [segment] の統合が補います
 end_silence_ms = 320
 max_utterance_s = 8.0
 min_utterance_ms = 250
 pre_roll_ms = 120
 
 [segment]
-# 半句合并：句子看起来没说完时先不上屏，等后续语音合并成一句
+# 半文の統合：言い終わっていないように見えるときは表示を保留し、続きと統合します
 merge = true
-# 最多等多久的后续语音（毫秒）；等不到就到点照常上屏
+# 続きを最大何 ms 待つか。来なければそのまま表示します
 merge_wait_ms = 800
-# 最多合并几段，防止一句话无限等
+# 最大いくつまで統合するか（1 文が無限に待つのを防ぐ）
 max_merge = 2
-# 合并后音频总长上限（秒）
+# 統合後の音声の長さ上限（秒）
 max_total_s = 12.0
-# 暂缓的硬上限；正常不会触发，只是避免一直空屏
+# 保留の上限。通常は発動しません（画面が空き続けるのを防ぐ保険）
 max_hold_ms = 12000
-# 上一段短于此值才合并重识别；长片段直接拼文本，省一次 ASR
+# 前の断片がこれより短いときだけ再認識。長い断片はテキストを連結して ASR を節約
 re_asr_under_ms = 2500
 
 [asr]
 engine = "auto"
-# 模型目录，用 python -m livesub download 下载
+# モデル置き場。python -m livesub download で取得できます
 model_dir = "models/sherpa-ja"
-# CPU 线程数；用 x264 软编码推流时建议 1~2
+# CPU スレッド数。x264 のソフトウェアエンコード配信では 1〜2 を推奨
 num_threads = 2
-# 段首补一点静音，避免模型吞掉第一个短词；一般不用改
+# 先頭に少し無音を足して、最初の短い語が飲まれるのを防ぎます。通常は変更不要
 lead_pad_ms = 200
 fallback_to_mock = true
 
 [mt]
-# opus=默认（75M ONNX，快且准）| echo=不翻译 | none=只显示日语
+# opus=既定（75M ONNX、速くて実用的）| echo=翻訳しない | none=日本語だけ表示
 engine = "opus"
 model_dir = "models/opus-mt-ja-zh-int8"
 num_threads = 2
 target_lang = "zh"
 max_chars = 40
-# 译前给 ASR 的无标点文本补句末标点（实测 F1 0.456 → 0.504）
+# 翻訳前に、句読点のない ASR 出力へ文末の句読点を補います（実測 F1 0.456 → 0.504）
 punctuate = true
 max_new_tokens = 48
 
 [glossary]
-# 术语表 / 固定表达总开关；关掉就是纯模型输出
+# 辞書（定型フレーズ／用語）のスイッチ。オフにするとモデル出力そのまま
 enabled = true
-# 词典目录（phrases.tsv + terms.tsv）
+# 辞書ディレクトリ（phrases.tsv + terms.tsv）
 dir = "glossary"
 max_phrase_len = 24
 
 [overlay]
-# 是否显示日语原文
+# 日本語の原文も表示するか
 bilingual = true
 font_family = "\"Microsoft YaHei\", \"Noto Sans SC\", \"PingFang SC\", sans-serif"
-# 中文字号(px)，按 OBS 画布 1920x1080 计算
+# 中国語字幕の文字サイズ(px)。OBS キャンバス 1920x1080 基準
 zh_size = 48
 ja_size = 26
 zh_color = "#FFFFFF"
 ja_color = "#B9C6D4"
 outline_color = "#000000"
-# 描边宽度(px)，0 表示不要描边
+# 縁取りの幅(px)。0 で縁取りなし
 outline_width = 4
 background = "transparent"
 position = "bottom"
@@ -83,7 +83,7 @@ fade_ms = 180
 
 [server]
 host = "127.0.0.1"
-# OBS 浏览器源里要填的端口
+# OBS のブラウザソースに入力するポート
 port = 8765
 
 [debug]

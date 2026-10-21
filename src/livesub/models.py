@@ -40,7 +40,7 @@ def search(query: str, limit: int = 20) -> list[str]:
     try:
         data = _get_json(url)
     except (urllib.error.URLError, TimeoutError) as exc:
-        raise RuntimeError(f"访问 {endpoint()} 失败：{exc}") from exc
+        raise RuntimeError(f"{endpoint()} へのアクセスに失敗しました：{exc}") from exc
     return [item.get("id", "") for item in data if item.get("id")]
 
 
@@ -60,7 +60,8 @@ def download(repo: str, target: str | Path, patterns: tuple[str, ...] = DEFAULT_
     files = _prefer_int8(files)
     if not files:
         raise RuntimeError(
-            f"{repo} 里没有匹配 {patterns} 的文件。可以先用 `livesub download --repo {repo} --list` 看清单。"
+            f"{repo} に {patterns} に一致するファイルがありません。"
+            f"`livesub download --repo {repo} --list` で一覧を確認できます。"
         )
 
     saved: list[Path] = []
@@ -78,7 +79,7 @@ def download_test_wavs(repo: str, target: str | Path) -> list[Path]:
     target_dir.mkdir(parents=True, exist_ok=True)
     files = [f for f in list_files(repo) if f.startswith("test_wavs/")]
     if not files:
-        raise RuntimeError(f"{repo} 里没有 test_wavs/ 目录")
+        raise RuntimeError(f"{repo} に test_wavs/ ディレクトリがありません")
     saved = []
     for name in files:
         url = f"{endpoint()}/{repo}/resolve/main/{urllib.parse.quote(name)}"
@@ -117,10 +118,10 @@ def _match(name: str, patterns: tuple[str, ...]) -> bool:
 
 def _fetch(url: str, destination: Path) -> Path:
     if destination.exists() and destination.stat().st_size > 0:
-        print(f"  已存在，跳过：{destination.name}")
+        print(f"  既に存在するためスキップ：{destination.name}")
         return destination
     tmp = destination.with_suffix(destination.suffix + ".part")
-    print(f"  下载 {url}")
+    print(f"  ダウンロード {url}")
     request = urllib.request.Request(url, headers={"User-Agent": "livesub/0.1"})
     try:
         with urllib.request.urlopen(request, timeout=60) as response, tmp.open("wb") as fh:
@@ -136,7 +137,7 @@ def _fetch(url: str, destination: Path) -> Path:
                     print(f"\r    {done / 1048576:.1f}/{total / 1048576:.1f} MB", end="")
     except (urllib.error.URLError, TimeoutError) as exc:
         tmp.unlink(missing_ok=True)
-        raise RuntimeError(f"下载失败：{exc}") from exc
+        raise RuntimeError(f"ダウンロードに失敗しました：{exc}") from exc
     if total:
         print()
     tmp.replace(destination)
@@ -169,18 +170,18 @@ def main(argv: list[str] | None = None) -> int:
             show_list = True
             i += 1
         else:
-            print(f"未知参数：{arg}")
+            print(f"不明な引数：{arg}")
             return 2
 
     if query:
         results = search(query)
-        print(f"在 {endpoint()} 上搜索 {query!r}：")
+        print(f"{endpoint()} で {query!r} を検索：")
         for name in results:
             print(f"  {name}")
         return 0
 
     if not repo:
-        print("用法：livesub download --search <关键词> | --repo <owner>/<name> [--to 目录]")
+        print("使い方：livesub download --search <キーワード> | --repo <owner>/<name> [--to ディレクトリ]")
         return 2
 
     if show_list:
@@ -190,11 +191,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if test_wavs:
         saved = download_test_wavs(repo, test_wavs)
-        print(f"完成：{len(saved)} 个测试音频 → {Path(test_wavs).resolve()}")
+        print(f"完了：テスト音声 {len(saved)} 個 → {Path(test_wavs).resolve()}")
         return 0
 
     saved = download(repo, target)
-    print(f"完成：{len(saved)} 个文件 → {Path(target).resolve()}")
+    print(f"完了：{len(saved)} 個のファイル → {Path(target).resolve()}")
     return 0
 
 

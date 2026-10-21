@@ -1,11 +1,11 @@
-﻿[build-system]
+[build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "livesub"
-version = "0.3.1"
-description = "给 OBS 用的本地实时日语→中文字幕（麦克风输入，纯本地，低延迟）"
+version = "0.4.0"
+description = "OBS 用のローカル・リアルタイム日本語→中国語字幕（マイク入力・完全ローカル・低遅延）"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

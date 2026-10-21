@@ -15,10 +15,10 @@ DEMO_PAIRS = {
 class EchoTranslator:
     """把日语原样加个前缀，用来验证"翻译这一段"是否接通。"""
 
-    name = "echo(未接翻译)"
+    name = "echo(翻訳未接続)"
 
     def translate(self, ja: str) -> str:
-        return f"［未接翻译］{ja}"
+        return f"［翻訳未接続］{ja}"
 
     def close(self) -> None:
         return None
@@ -39,10 +39,10 @@ class NullTranslator:
 class DemoTranslator:
     """给预设台词配上中文，让 demo 看起来像真的在翻译。"""
 
-    name = "demo(预设译文)"
+    name = "demo(台本訳)"
 
     def translate(self, ja: str) -> str:
-        return DEMO_PAIRS.get(ja, f"［演示译文］{ja}")
+        return DEMO_PAIRS.get(ja, f"［デモ訳］{ja}")
 
     def close(self) -> None:
         return None

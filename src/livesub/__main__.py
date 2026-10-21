@@ -6,6 +6,9 @@
     devices   列出可用麦克风
     doctor    环境自检
     download  下载识别模型
+
+注意：这里所有面向用户的文字都是日语（产品面向日本主播）。
+代码注释保持中文，方便维护。
 """
 
 from __future__ import annotations
@@ -36,28 +39,28 @@ def main(argv: list[str] | None = None) -> int:
 
         return models.main(argv_list[1:])
 
-    parser = argparse.ArgumentParser(prog="livesub", description=f"{APP_NAME} — 本地实时日语字幕")
+    parser = argparse.ArgumentParser(prog="livesub", description=f"{APP_NAME} — ローカル・リアルタイム日本語字幕")
     parser.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
     sub = parser.add_subparsers(dest="command")
 
-    p_run = sub.add_parser("run", help="启动服务（默认命令）")
+    p_run = sub.add_parser("run", help="起動する（既定のコマンド）")
     _add_common(p_run)
-    p_run.add_argument("--port", type=int, default=0, help="覆盖配置里的端口")
+    p_run.add_argument("--port", type=int, default=0, help="設定ファイルのポートを上書きする")
     p_run.add_argument("--synthetic", type=float, default=0.0, help=argparse.SUPPRESS)
-    p_run.add_argument("--wav", type=str, default="", help="用 WAV 文件代替麦克风（调试用）")
-    p_run.add_argument("--mock", action="store_true", help="强制演示模式（不加载模型）")
-    p_run.add_argument("--normal-priority", action="store_true", help="不降低进程优先级")
+    p_run.add_argument("--wav", type=str, default="", help="マイクの代わりに WAV ファイルを使う（デバッグ用）")
+    p_run.add_argument("--mock", action="store_true", help="デモモードを強制する（モデルを読み込まない）")
+    p_run.add_argument("--normal-priority", action="store_true", help="プロセスの優先度を下げない")
 
-    p_self = sub.add_parser("selftest", help="无硬件自测")
+    p_self = sub.add_parser("selftest", help="ハードウェアなしの自己テスト")
     p_self.add_argument("--seconds", type=float, default=8.0)
     p_self.add_argument("--config", type=str, default=CONFIG_FILENAME)
-    p_self.add_argument("--wav", type=str, default="", help="用 WAV 代替合成音频")
-    p_self.add_argument("--real", action="store_true", help="用真实识别模型（默认演示引擎）")
+    p_self.add_argument("--wav", type=str, default="", help="合成音声の代わりに WAV を使う")
+    p_self.add_argument("--real", action="store_true", help="実際の認識モデルを使う（既定はデモエンジン）")
 
-    sub.add_parser("devices", help="列出可用麦克风")
-    sub.add_parser("doctor", help="环境自检")
+    sub.add_parser("devices", help="使用可能なマイクの一覧")
+    sub.add_parser("doctor", help="環境チェック")
     # download 只在这里露个名字，实际解析在 main() 开头
-    sub.add_parser("download", help="下载识别模型")
+    sub.add_parser("download", help="認識モデルをダウンロード")
 
     # 不带子命令时默认按 run 处理：livesub --port 9000 等价于 livesub run --port 9000。
     # 必须在解析前补 "run"：否则 argparse 会把 "--mock" 后面那个裸值当成子命令。
@@ -85,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--config", type=str, default=CONFIG_FILENAME, help="配置文件路径")
+    parser.add_argument("--config", type=str, default=CONFIG_FILENAME, help="設定ファイルのパス")
 
 
 # --------------------------------------------------------------------------- run
@@ -103,13 +106,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
         source = build_source(cfg, wav=args.wav or None,
                               synthetic_seconds=args.synthetic or None)
     except Exception as exc:
-        print(f"\n[启动失败] 音频输入：{exc}\n")
+        print(f"\n[起動失敗] 音声入力：{exc}\n")
         return 3
 
     asr = build_asr(cfg, force_mock=demo)
     mt = build_mt(cfg, force_mock=demo)
     if not demo and last_asr_error():
-        print(f"[提示] 识别模型未加载，已回退到演示模式：{last_asr_error()}")
+        print(f"[ヒント] 認識モデルを読み込めなかったため、デモモードに切り替えました：{last_asr_error()}")
 
     publisher = Publisher()
     metrics = Metrics()
@@ -131,11 +134,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     import uvicorn
 
     if not _port_available(cfg.server.host, cfg.server.port):
-        print(f"\n[启动失败] 端口 {cfg.server.port} 已被占用。")
-        print("  多半是已经有一个 LiveSub 在运行，先关掉它的窗口再试；")
-        print(f"  或者换端口：LiveSub.exe --port 9000（OBS 的 URL 也要跟着改）\n")
+        print(f"\n[起動失敗] ポート {cfg.server.port} は使用中です。")
+        print("  すでに LiveSub が起動している可能性があります。先にそちらを閉じてください。")
+        print("  別のポートを使う場合： LiveSub.exe --port 9000（OBS の URL も変更してください）\n")
         if sys.stdin and sys.stdin.isatty():
-            input("按回车退出…")
+            input("Enter キーで終了…")
         return 4
 
     try:
@@ -151,24 +154,25 @@ def _print_banner(cfg: Config, status: PipelineStatus) -> None:
     print(f"\n{line}")
     print(f"  {APP_NAME} {__version__}")
     print(line)
-    print(f"  字幕页   {base}/overlay")
-    print(f"  设置页   {base}/admin            ← 调字体/颜色/背景，加词典")
-    print(f"  调试页   {base}/overlay?debug=1     （显示延迟和连接状态）")
-    print(f"  预排版   {base}/overlay?preview=1   （不推流也能调字体）")
-    print(f"  麦克风   {status.source}")
-    print(f"  识别     {status.asr}")
-    print(f"  翻译     {status.mt}")
+    print(f"  字幕ページ　：{base}/overlay")
+    print(f"  設定ページ　：{base}/admin            ← フォント・色・背景・辞書")
+    print(f"  デバッグ　　：{base}/overlay?debug=1     （遅延と接続状態を表示）")
+    print(f"  プレビュー　：{base}/overlay?preview=1   （配信なしでレイアウト確認）")
+    print(f"  マイク　　　：{status.source}")
+    print(f"  認識　　　　：{status.asr}")
+    print(f"  翻訳　　　　：{status.mt}")
     if status.demo:
         print(line)
-        print("  ⚠ 当前是演示模式：文字是预设台词，不是真识别。")
-        print("    要接入真实识别： pip install -r requirements-asr.txt")
-        print("                    python -m livesub download --search \"zipformer ja\"")
-        print("                    按 README 的步骤放好模型后重启。")
+        print("  ⚠ 現在はデモモードです：表示されるのは台本のテキストで、実際の認識ではありません。")
+        print("    実際の認識を使うには： pip install -r requirements-asr.txt")
+        print("                          python -m livesub download --search \"zipformer ja\"")
+        print("                          モデルを配置して再起動してください（README 参照）。")
     print(line)
-    print("  OBS：添加「浏览器」源 → 勾选「本地文件」关掉 → URL 填上面的字幕页")
-    print("       宽 1920 高 1080 → 勾选「关闭源时关闭」不要开 → 背景透明无需设置")
+    print("  OBS：「ブラウザ」ソースを追加 → URL に上の字幕ページを入力")
+    print("       幅 1920 / 高さ 1080 →「ソースが非表示のときにシャットダウン」はオフ")
+    print("       背景は最初から透明です（追加の設定は不要）")
     print(line)
-    print("  按 Ctrl+C 停止\n")
+    print("  Ctrl+C で停止\n")
 
 
 def _port_available(host: str, port: int) -> bool:
@@ -213,14 +217,14 @@ def _cmd_selftest(args: argparse.Namespace) -> int:
     status = PipelineStatus()
     pipeline = Pipeline(cfg, source, asr, mt, publisher, metrics, status, log_dir="logs")
 
-    label = args.wav or f"合成音频 {args.seconds:.1f}s"
-    print(f"\n自测：{label} → VAD 切句 → {status.asr} → {status.mt}\n")
+    label = args.wav or f"合成音声 {args.seconds:.1f}s"
+    print(f"\n自己テスト：{label} → VAD 区切り → {status.asr} → {status.mt}\n")
     pipeline.run()
 
     print(f"\n{'idx':<5}{'audio s':>9}{'asr ms':>9}{'mt ms':>8}{'end->line ms':>15}  text")
     print("─" * 88)
     for trace in metrics.traces:
-        merge_note = f"  [合并 {trace.segments} 段]" if trace.segments > 1 else ""
+        merge_note = f"  [統合 {trace.segments} 断片]" if trace.segments > 1 else ""
         print(
             f"{trace.utt_id:<5}{trace.audio_ms / 1000:>9.2f}{trace.asr_ms:>9.1f}"
             f"{trace.mt_ms:>8.1f}{trace.end_to_line_ms:>15.1f}  {trace.text}{merge_note}"
@@ -229,19 +233,19 @@ def _cmd_selftest(args: argparse.Namespace) -> int:
             print(f"{'':<5}{'':>9}{'':>9}{'':>8}{'':>15}  → {trace.zh}")
     print("─" * 88)
     summary = metrics.summary()
-    print(f"共 {summary.get('count', 0)} 句，丢弃噪声片段 {summary.get('dropped_segments', 0)} 个")
+    print(f"合計 {summary.get('count', 0)} 文、ノイズ断片を {summary.get('dropped_segments', 0)} 個破棄")
     if summary.get("merged_segments") or summary.get("dropped_fillers"):
         print(
-            f"断句合并：合并 {summary.get('merged_segments', 0)} 次 / "
-            f"暂缓 {summary.get('held_segments', 0)} 段 / "
-            f"等超时 {summary.get('hold_timeouts', 0)} 段 / "
-            f"丢弃语气词 {summary.get('dropped_fillers', 0)} 句"
+            f"区切りの統合：統合 {summary.get('merged_segments', 0)} 回 / "
+            f"保留 {summary.get('held_segments', 0)} 断片 / "
+            f"タイムアウト {summary.get('hold_timeouts', 0)} 断片 / "
+            f"フィラー破棄 {summary.get('dropped_fillers', 0)} 文"
         )
     if "end_to_line_ms" in summary:
         lat = summary["end_to_line_ms"]
-        print(f"说完→上屏：p50 {lat['p50']}ms / p95 {lat['p95']}ms / max {lat['max']}ms")
-        print("（这里不含 OBS 渲染与显示器延迟，通常再加 30~80ms）")
-    print(f"\n日志：{(Path('logs')).resolve()}\n")
+        print(f"発話終了→表示：p50 {lat['p50']}ms / p95 {lat['p95']}ms / max {lat['max']}ms")
+        print("（OBS の描画とモニターの遅延は含みません。通常さらに 30〜80ms 加わります）")
+    print(f"\nログ：{(Path('logs')).resolve()}\n")
     return 0
 
 
@@ -254,12 +258,12 @@ def _cmd_devices() -> int:
     try:
         devices = list_input_devices()
     except Exception as exc:
-        print(f"读取设备失败：{exc}")
+        print(f"デバイスの読み取りに失敗しました：{exc}")
         return 1
     if not devices:
-        print("没有找到任何输入设备。")
+        print("入力デバイスが見つかりません。")
         return 1
-    print("\n可用的麦克风（把名字的一部分填到 config.toml 的 audio.device）：\n")
+    print("\n使用可能なマイク（名前の一部を config.toml の audio.device に入力）：\n")
     for index, name, channels in devices:
         print(f"  [{index:>2}] {name}  ({channels}ch)")
     print()
@@ -271,13 +275,13 @@ def _cmd_devices() -> int:
 
 def _cmd_doctor() -> int:
     ok = True
-    print(f"\n{APP_NAME} {__version__} 环境自检\n")
+    print(f"\n{APP_NAME} {__version__} 環境チェック\n")
 
     version = sys.version_info
     good = version >= (3, 10)
     ok &= good
     print(f"  {'✓' if good else '✗'} Python {version.major}.{version.minor}.{version.micro}"
-          + ("" if good else "  （需要 3.10+）"))
+          + ("" if good else "  （3.10 以上が必要）"))
 
     for module, hint in (
         ("numpy", "pip install -r requirements.txt"),
@@ -295,39 +299,39 @@ def _cmd_doctor() -> int:
     try:
         import sherpa_onnx  # noqa: F401
 
-        print("  ✓ sherpa-onnx（真实识别引擎已安装）")
+        print("  ✓ sherpa-onnx（音声認識エンジン導入済み）")
     except Exception:
-        print("  · sherpa-onnx 未安装（当前只能演示模式）→ pip install -r requirements-asr.txt")
+        print("  · sherpa-onnx 未導入（現在はデモモードのみ）→ pip install -r requirements-asr.txt")
 
     cfg = load(CONFIG_FILENAME)
     model_dir = Path(cfg.asr.model_dir)
     if not model_dir.is_absolute():
         model_dir = data_dir() / model_dir
     if (model_dir / "tokens.txt").exists():
-        print(f"  ✓ 识别模型 {model_dir}")
+        print(f"  ✓ 認識モデル {model_dir}")
     else:
-        print(f"  · 识别模型缺失 {model_dir}  → python -m livesub download --search \"zipformer ja\"")
+        print(f"  · 認識モデルなし {model_dir}  → python -m livesub download --search \"zipformer ja\"")
 
     overlay = bundle_dir() / "overlay" / "index.html"
-    print(f"  {'✓' if overlay.exists() else '✗'} 字幕页 {overlay}")
+    print(f"  {'✓' if overlay.exists() else '✗'} 字幕ページ {overlay}")
     ok &= overlay.exists()
 
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind((cfg.server.host, cfg.server.port))
-        print(f"  ✓ 端口 {cfg.server.port} 可用")
+        print(f"  ✓ ポート {cfg.server.port} は使用可能")
     except OSError:
-        print(f"  ✗ 端口 {cfg.server.port} 被占用（改 config.toml 的 server.port）")
+        print(f"  ✗ ポート {cfg.server.port} は使用中（config.toml の server.port を変更）")
 
     try:
         from .audio.capture import list_input_devices
 
         count = len(list_input_devices())
-        print(f"  {'✓' if count else '✗'} 麦克风 {count} 个")
+        print(f"  {'✓' if count else '✗'} マイク {count} 台")
     except Exception as exc:
-        print(f"  ✗ 麦克风检测失败：{exc}")
+        print(f"  ✗ マイクの検出に失敗しました：{exc}")
 
-    print("\n结论：" + ("环境就绪。" if ok else "有项目未就绪，见上面提示。") + "\n")
+    print("\n結果：" + ("環境は準備完了です。" if ok else "未準備の項目があります。上のヒントを確認してください。") + "\n")
     return 0 if ok else 1
 
 

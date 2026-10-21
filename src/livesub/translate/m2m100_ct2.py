@@ -32,7 +32,7 @@ class M2M100CT2:
             import sentencepiece
         except Exception as exc:
             raise RuntimeError(
-                "缺少翻译依赖，请执行：pip install -r requirements-mt.txt"
+                "翻訳の依存関係がありません。pip install -r requirements-mt.txt を実行してください"
             ) from exc
 
         self._dir = Path(model_dir)
@@ -40,7 +40,7 @@ class M2M100CT2:
             self._dir = data_dir() / self._dir
         spm_file = self._dir / "sentencepiece.bpe.model"
         if not (self._dir / "model.bin").exists() or not spm_file.exists():
-            raise FileNotFoundError(f"翻译模型不完整：{self._dir}")
+            raise FileNotFoundError(f"翻訳モデルが不完全です：{self._dir}")
 
         self._sp = sentencepiece.SentencePieceProcessor(model_file=str(spm_file))
         self._src_token = f"__{src_lang}__"

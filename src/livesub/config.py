@@ -297,7 +297,7 @@ def load(path: Path | str = CONFIG_FILENAME) -> Config:
         text = p.read_bytes().decode("utf-8-sig")
         raw = tomllib.loads(text)
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        print(f"[配置] 读取 {p} 失败（{exc}），本次使用默认配置。", file=sys.stderr)
+        print(f"[設定] {p} の読み込みに失敗しました（{exc}）。今回は既定の設定を使用します。", file=sys.stderr)
         return cfg
 
     _apply(cfg, raw)
@@ -316,7 +316,7 @@ def _bool(value: Any, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on", "是")
+        return value.strip().lower() in ("1", "true", "yes", "on", "是", "はい", "オン")
     return default
 
 
@@ -383,10 +383,10 @@ def _validate(cfg: Config) -> None:
 
 
 def to_toml(cfg: Config) -> str:
-    """把配置序列化成带中文注释的 TOML（首次运行时写给用户看）。"""
+    """把配置序列化成带日语注释的 TOML（首次运行时写给用户看）。"""
     out: list[str] = [
-        "# LiveSub 配置。改完重启程序生效。",
-        "# 全部留空/默认即可运行；只有换麦克风或调样式时才需要动这里。",
+        "# LiveSub の設定ファイルです。変更したらプログラムを再起動してください。",
+        "# すべて既定値のままで動きます。マイクや見た目を変えたいときだけ編集してください。",
         "",
     ]
     comments = _COMMENTS
@@ -410,35 +410,35 @@ def to_toml(cfg: Config) -> str:
 
 _COMMENTS: dict[str, dict[str, str]] = {
     "audio": {
-        "device": "留空=系统默认麦克风；填设备名的一部分即可匹配",
-        "gain": "音量增益，麦克风太小声可以调到 1.5~2.0",
+        "device": "空欄＝システム既定のマイク。名前の一部を書けば一致するマイクを使います",
+        "gain": "入力ゲイン。マイクが小さいときは 1.5〜2.0 に上げます",
     },
     "vad": {
-        "end_silence_ms": "静音多久算这句话结束；配合 [segment] 的合并，不用再为了不断句而调大",
-        "min_speech_ms": "越大越能挡掉咳嗽/碰麦的杂音",
+        "end_silence_ms": "無音が何 ms 続いたら発話終了とみなすか。[segment] の統合があるので、区切りのために大きくする必要はありません",
+        "min_speech_ms": "大きくするほど咳・マイク叩きなどの雑音を弾きます",
     },
     "segment": {
-        "merge": "半句合并总开关；关掉退回“静音到点就出”的老行为",
-        "merge_wait_ms": "句子看起来没说完时，最多再等多久的后续语音",
-        "max_merge": "最多合并几段，防止一句话无限等",
-        "max_hold_ms": "暂缓的硬上限，超过就先出字幕避免空屏",
-        "re_asr_under_ms": "上一段短于此值才重新识别；长片段直接拼文本，省一次 ASR",
+        "merge": "半文の統合スイッチ。オフにすると「無音が来たらすぐ表示」に戻ります",
+        "merge_wait_ms": "言い終わっていないように見えるとき、続きを最大何 ms 待つか",
+        "max_merge": "最大いくつまで統合するか（1 文が無限に待つのを防ぐ）",
+        "max_hold_ms": "保留の上限。超えたら先に表示して画面が空くのを防ぎます",
+        "re_asr_under_ms": "前の断片がこの長さ未満なら再認識。長い断片はテキストを連結して ASR を 1 回節約",
     },
     "asr": {
-        "model_dir": "模型目录，用 python -m livesub download 下载",
-        "num_threads": "CPU 线程数；用 x264 软编码推流时建议 1~2",
-        "lead_pad_ms": "段首补一点静音，避免模型吞掉第一个短词；一般不用改",
+        "model_dir": "モデル置き場。python -m livesub download で取得できます",
+        "num_threads": "CPU スレッド数。x264 のソフトウェアエンコード配信では 1〜2 を推奨",
+        "lead_pad_ms": "先頭に少し無音を足して、最初の短い語が飲まれるのを防ぎます。通常は変更不要",
     },
-    "mt": {"engine": "opus=默认（75M，快且准）| qwen=更准但慢得多 | none=只显示日语"},
+    "mt": {"engine": "opus=既定（75M、速くて実用的）| qwen=より正確だが非常に遅い | none=日本語だけ表示"},
     "glossary": {
-        "enabled": "术语表/固定表达总开关；关掉就是纯模型输出，用于对比",
-        "dir": "词典目录（phrases.tsv + terms.tsv）；把同名文件放到 exe 旁可覆盖内置条目",
-        "max_phrase_len": "超过这个长度就不做整句查表",
+        "enabled": "辞書（定型フレーズ／用語）のスイッチ。オフにするとモデル出力そのまま",
+        "dir": "辞書ディレクトリ（phrases.tsv + terms.tsv）。同じ名前のファイルを exe の隣に置くと内蔵項目を上書き",
+        "max_phrase_len": "これより長い文は定型フレーズの照合をしません",
     },
     "overlay": {
-        "bilingual": "是否显示日语原文",
-        "zh_size": "中文字号(px)，按 OBS 画布 1920x1080 计算",
-        "outline_width": "描边宽度(px)，0 表示不要描边",
+        "bilingual": "日本語の原文も表示するか",
+        "zh_size": "中国語字幕の文字サイズ(px)。OBS キャンバス 1920x1080 基準",
+        "outline_width": "縁取りの幅(px)。0 で縁取りなし",
     },
-    "server": {"port": "OBS 浏览器源里要填的端口"},
+    "server": {"port": "OBS のブラウザソースに入力するポート"},
 }

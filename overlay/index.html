@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="ja">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -139,7 +139,7 @@
 <body>
   <div id="stage" class="bottom"></div>
   <div id="hud"></div>
-  <div id="link-warn">字幕未连接</div>
+  <div id="link-warn">字幕未接続</div>
 
 <script>
 (() => {
@@ -273,12 +273,12 @@
     const ss = String(up % 60).padStart(2, "0");
 
     hud.innerHTML =
-      `LiveSub  <b>${state.connected ? "已连接" : "未连接"}</b>\n` +
-      `识别: ${s.demo ? "演示模式" : (s.asr || "-")}\n` +
-      `翻译: ${s.mt || "-"}\n` +
-      `延迟: ${lat ? lat.end_to_line_ms + " ms" : "-"}   ` +
+      `LiveSub  <b>${state.connected ? "接続済み" : "未接続"}</b>\n` +
+      `認識: ${s.demo ? "デモモード" : (s.asr || "-")}\n` +
+      `翻訳: ${s.mt || "-"}\n` +
+      `遅延: ${lat ? lat.end_to_line_ms + " ms" : "-"}   ` +
       `ASR ${lat ? lat.asr_ms + " ms" : "-"}   MT ${lat ? lat.mt_ms + " ms" : "-"}\n` +
-      `行数: ${state.lines}   运行: ${mm}:${ss}` +
+      `行数: ${state.lines}   稼働: ${mm}:${ss}` +
       (s.last_error ? `\n<span class="bad">${s.last_error}</span>` : "");
   }
   setInterval(updateHud, 500);

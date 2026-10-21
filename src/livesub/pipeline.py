@@ -130,7 +130,7 @@ class Pipeline:
         self._status.source = getattr(source, "name", "unknown")
         self._status.asr = getattr(asr, "name", "unknown")
         self._status.mt = getattr(mt, "name", "unknown")
-        self._status.demo = "demo" in self._status.asr or "未加载模型" in self._status.asr
+        self._status.demo = bool(getattr(asr, "is_demo", False)) or "demo" in self._status.asr
 
         self._log_dir = Path(log_dir)
         if not self._log_dir.is_absolute():

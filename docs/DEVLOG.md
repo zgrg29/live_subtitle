@@ -1,4 +1,4 @@
-# 开发日志
+﻿# 开发日志
 
 > 只记"发生了什么、为什么、数字是多少"。架构细节看 [ARCHITECTURE.md](ARCHITECTURE.md)，
 > 决策理由看 [DECISIONS.md](DECISIONS.md)，下一步看 [HANDOFF.md](HANDOFF.md)。
@@ -573,6 +573,57 @@ dev 涨 0.04，holdout 涨 0.019——**这就是"名词类词条"的全部剩�
 - 开发日志 / 进度 / 决策这些**保留中文**，并且要从 README 里搬出去（README 只放用户文档）。
 
 实现上要加一层 i18n（`locales/ja.json` + `zh.json`），默认 `ja`，`config.toml` 里可切。
+
+---
+
+## 2026-10-21（续）· 日语化完成 + 词典扩容（L10N / M2.6）
+
+### 做了什么
+
+- **全部用户可见文案改为日语**：`__main__.py`（子命令帮助、启动横幅、selftest、devices、doctor）、
+  `models.py` / `server.py` / `factory.py` / `audio` / `asr` / `translate` 的异常与提示、
+  `config.py` 生成的注释、`overlay/admin.html`、`overlay/index.html` 的 HUD、
+  `glossary/*.tsv` 的表头与备注；
+- **`启动.bat` → `起動.bat`**，内容日语；绿色版附带的 `使用说明.txt` → `使い方.txt`；
+- **README 重写为日语用户手册**（安装 / OBS / 设置 / 词典 / FAQ），
+  开发进度、质量数据、开发视角的局限搬到 `docs/PROGRESS.md`（中文）；
+- **发布说明**改为日语（`docs/RELEASE-0.4.0.md` + `dist/RELEASE_BODY.md`）；
+- **词典去重 + 扩容**：固定表达 137 → **292**，术语 88 → **155**。
+  新增开场/收播、观众互动、游戏实况、配信トラブル、告知等整句；补平台/游戏/食物术语。
+- **新增 `tests/test_localization.py`**（6 个）：守住生成配置、admin、overlay、README、
+  启动脚本、词典表头不被改回中文。
+
+### 和原计划的偏差：没有加 i18n 切换层
+
+原计划是 `locales/ja.json` + `zh.json`、`config.toml` 可切。实际改成**单语日语**：
+
+- 产品只面向日本用户，中文开发者看开发文档即可；
+- 目标是"用户看到的地方是日语"，不是"支持多语言"；两套文案会让每次改字都要同步两遍；
+- 以后真要做多语言，再把各文件里的文案抽到 `locales/*.json` 即可，成本不会更高。
+
+### 验证
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v   # 59 个，全绿
+.\.venv\Scripts\python.exe tools\eval_mt.py --tag ja-final    # F1 0.610（扩容前 0.603）
+.\.venv\Scripts\python.exe tools\build_exe.py                 # 602MB，冒烟测试通过
+```
+
+- exe 版 `doctor`、`/admin`、`/overlay`、`/api/glossary` 全部日语；
+- `/api/glossary` 返回 292 + 155 条，备注为日语；
+- 词典扩容后「明显错」仍是 5/60，没有回退（详见 `docs/PROGRESS.md`）。
+
+### 版本号：0.3.1 → 0.4.0
+
+UI 全面日语化 + 词典扩容对用户是可见的功能变化，按语义化版本升到 **0.4.0**
+（`src/livesub/__init__.py`、`pyproject.toml`、绿色版与发布说明同步）。
+
+### 下一步
+
+按 [HANDOFF.md](../HANDOFF.md) 的顺序：发布 0.4.0 → ASR 热词 → 真人主播断句基线 → M3。
+
+绿色版已重打（2026-10-21）：`dist\LiveSub-0.4.0`，zip 见 `dist\LiveSub-0.4.0-win64.zip`，
+SHA256 见同目录的 `.sha256.txt`。
 
 
 
