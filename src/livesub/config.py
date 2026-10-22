@@ -66,6 +66,10 @@ class AudioConfig:
     # PortAudio 的设备索引。同名麦克风（两个同型号 USB 麦）只靠名字会选到第一个，
     # 所以设置页会同时保存索引；重启后索引变了会退回按名字匹配。
     device_index: int = -1
+    # 0 起始的输入通道。-1 = 所有通道取平均。
+    # 2ch 音频接口（MOTU / UR22 / AG03…）常把麦克风插在输入 2，只取 0 号通道
+    # 会得到"有电平但没人声"的音频：电平条会动，识别却一直是空字符串。
+    channel: int = 0
     sample_rate: int = 16000  # ASR 模型通常是 16k，最好不要改
     block_ms: int = 20  # 每次读取的音频块长度，20ms 是延迟/开销的平衡点
     gain: float = 1.0
@@ -239,6 +243,7 @@ def asdict_audio(cfg: Config) -> dict[str, Any]:
     return {
         "device": cfg.audio.device,
         "device_index": cfg.audio.device_index,
+        "channel": cfg.audio.channel,
         "gain": cfg.audio.gain,
         "threshold": cfg.vad.threshold,
         "noise_ratio": cfg.vad.noise_ratio,
@@ -365,6 +370,7 @@ def _validate(cfg: Config) -> None:
     a = cfg.audio
     a.device = str(a.device or "")
     a.device_index = max(-1, _num(a.device_index, -1, int))
+    a.channel = max(-1, min(7, _num(a.channel, 0, int)))
     a.sample_rate = max(8000, min(48000, _num(a.sample_rate, 16000, int)))
     a.block_ms = max(10, min(100, _num(a.block_ms, 20, int)))
     a.gain = max(0.1, min(8.0, _num(a.gain, 1.0, float)))
@@ -463,6 +469,7 @@ _COMMENTS: dict[str, dict[str, str]] = {
     "audio": {
         "device": "空欄＝システム既定のマイク。名前の一部を書けば一致するマイクを使います",
         "device_index": "同じ名前のマイクが複数あるときの識別用。通常は設定ページから選べば自動で入ります",
+        "channel": "入力チャンネル（0始まり）。2chインターフェースでマイクが入力2なら 1、全部まとめるなら -1",
         "gain": "入力ゲイン。マイクが小さいときは 1.5〜2.0 に上げます",
     },
     "vad": {

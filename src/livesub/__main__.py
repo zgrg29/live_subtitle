@@ -122,8 +122,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # 只有真实麦克风才能在设置页里热切换；WAV/合成音源没有设备可换。
     source_factory = None
     if not args.wav and not args.synthetic:
-        source_factory = lambda device, index: build_source(  # noqa: E731
-            cfg, device=device, device_index=index
+        source_factory = lambda device, index, channel: build_source(  # noqa: E731
+            cfg, device=device, device_index=index, channel=channel
         )
     pipeline = Pipeline(cfg, source, asr, mt, publisher, metrics, status,
                         source_factory=source_factory)

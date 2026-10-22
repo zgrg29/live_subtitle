@@ -137,6 +137,25 @@
   .record-info div { display: flex; gap: 12px; align-items: baseline; }
   .record-info span { color: var(--muted); min-width: 52px; }
   .record-info code { color: var(--fg); word-break: break-all; font-size: 12px; }
+
+  .diag-list { display: grid; gap: 8px; margin: 12px 0; }
+  .diag-row { display: grid; grid-template-columns: 20px 1fr auto; gap: 10px; align-items: baseline;
+              padding: 9px 12px; background: var(--input); border: 1px solid var(--line);
+              border-radius: 8px; font-size: 13px; }
+  .diag-row .mark { font-weight: 700; text-align: center; }
+  .diag-row.ok .mark { color: var(--ok); }
+  .diag-row.warn .mark { color: #e0b34a; }
+  .diag-row.ng .mark { color: #ff8b8b; }
+  .diag-row .val { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .diag-verdict { margin: 10px 0 14px; padding: 12px 14px; border-radius: 8px; font-size: 14px; line-height: 1.55;
+                  background: rgba(90, 170, 255, 0.10); border: 1px solid rgba(90, 170, 255, 0.35); }
+  .diag-verdict.ng { background: rgba(255, 90, 90, 0.10); border-color: rgba(255, 120, 120, 0.40); }
+  .diag-out { margin: 12px 0 0; padding: 12px; background: var(--input); border: 1px solid var(--line);
+              border-radius: 8px; font: 12px/1.55 ui-monospace, Consolas, monospace;
+              white-space: pre-wrap; word-break: break-all; max-height: 320px; overflow: auto; }
+  .meter-ch { display: flex; gap: 16px; margin-top: 7px; font: 11px/1.4 ui-monospace, Consolas, monospace;
+              color: var(--muted); font-variant-numeric: tabular-nums; }
+  .meter-ch .hot { color: var(--ok); }
 </style>
 </head>
 <body>
@@ -148,6 +167,7 @@
     <button id="tab-audio" data-panel="panel-audio">音声</button>
     <button id="tab-glossary" data-panel="panel-glossary">辞書</button>
     <button id="tab-record" data-panel="panel-record">記録</button>
+    <button id="tab-diag" data-panel="panel-diag">診断</button>
   </div>
   <div class="spacer"></div>
   <span class="status" id="top-status"></span>
@@ -257,6 +277,18 @@
           <span class="status" id="audio-source"></span>
         </div>
 
+        <div class="field" id="channel-field" style="grid-column: 1 / -1">
+          <label>入力チャンネル（2ch インターフェースでマイクが「入力2」なら 2）</label>
+          <div class="row">
+            <select id="audio_channel">
+              <option value="0">1（L・既定）</option>
+              <option value="1">2（R）</option>
+              <option value="-1">すべてミックス</option>
+            </select>
+            <span class="hint" style="margin:0">迷ったら「すべてミックス」。下の ch 別レベルで声が入っている方を選べます。</span>
+          </div>
+        </div>
+
         <div class="field">
           <label>入力ゲイン（マイクが小さいときは上げる）</label>
           <div class="row">
@@ -287,6 +319,7 @@
         <div class="meter-scale">
           <span>-66</span><span>-48</span><span>-30</span><span>-12</span><span>0 dB</span>
         </div>
+        <div class="meter-ch" id="meter-channels"></div>
         <p class="hint meter-hint">
           青い線が「認識しきい値」です。声を出したときのレベルがこの線を超えるように調整してください。
           周囲のノイズが大きいときは、誤認識を避けるため実際のしきい値が自動で少し上がります。
@@ -332,6 +365,38 @@
         データを共有する前に、写っている人全員の同意を確認してください。
         削除するときは保存先フォルダをまるごと消してください。
       </p>
+    </div>
+  </section>
+
+  <!-- ================= 診断 ================= -->
+  <section id="panel-diag" class="hidden">
+    <div class="card wide">
+      <h2>診断（字幕が出ないとき）</h2>
+      <p class="hint">
+        「音声 → 声の検出 → 文の切り出し → 認識 → 字幕 → OBS 接続」の順に、どこで止まっているかを表示します。
+        すべてこの PC の中だけで完結し、外部には送信しません。
+      </p>
+
+      <div class="diag-list" id="diag-list"></div>
+      <div class="diag-verdict" id="diag-verdict">読み込み中…</div>
+
+      <div class="actions">
+        <button class="primary" id="diag-test">直近6秒で認識テスト</button>
+        <button class="ghost" id="diag-bundle">サポート用ファイルを保存</button>
+        <button class="ghost" id="diag-refresh">更新</button>
+        <span class="status" id="diag-status"></span>
+      </div>
+
+      <pre class="diag-out" id="diag-out">—</pre>
+      <p class="hint">
+        「直近6秒で認識テスト」は、いま届いている音声をそのまま認識し直します。
+        ここで文字が出れば認識は動いていて、出なければマイクのチャンネルか入力音声の問題です。
+      </p>
+    </div>
+
+    <div class="card wide">
+      <h2>環境</h2>
+      <pre class="diag-out" id="diag-env">—</pre>
     </div>
   </section>
 
@@ -404,7 +469,7 @@
   const $ = (id) => document.getElementById(id);
   const state = {
     cfg: null, phrases: [], terms: [],
-    audio: null, devices: [], record: null,
+    audio: null, devices: [], record: null, channelCount: 1,
     levelDb: -90, peakDb: -90, peakAt: 0, levelAt: 0, recordBusy: false,
   };
 
@@ -422,7 +487,7 @@
   }
 
   /* ---------------- タブ ---------------- */
-  const PANELS = ["panel-style", "panel-audio", "panel-glossary", "panel-record"];
+  const PANELS = ["panel-style", "panel-audio", "panel-glossary", "panel-record", "panel-diag"];
   document.querySelectorAll(".tabs button").forEach((btn) => {
     btn.onclick = () => {
       document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b === btn));
@@ -430,6 +495,8 @@
       if (btn.dataset.panel === "panel-glossary" && !state.phrases.length) loadGlossary();
       if (btn.dataset.panel === "panel-audio") loadAudio();
       if (btn.dataset.panel === "panel-record") loadRecord();
+      if (btn.dataset.panel === "panel-diag") startDiagPolling();
+      else stopDiagPolling();
     };
   });
 
@@ -755,12 +822,17 @@
       chosen = opt;
     }
     sel.value = chosen ? chosen.value : "";
+
+    // 2ch 以上のデバイスのときだけチャンネル選択を目立たせる（1ch マイクには無関係）
+    state.channelCount = Math.max(1, Number(data.channel_count) || 1);
+    $("channel-field").style.display = state.channelCount > 1 ? "" : "none";
   }
 
   function applyAudioConfig(data) {
     state.audio = data.config || {};
     $("audio_gain").value = String(state.audio.gain ?? 1);
     $("audio_threshold").value = String(Math.round(data.threshold_db ?? -42));
+    $("audio_channel").value = String(state.audio.channel ?? 0);
     refreshAudioOutputs();
     let text = "動作中のデバイス：" + (data.source || "-");
     if (data.error) text += "　（デバイス一覧を取得できませんでした）";
@@ -797,6 +869,7 @@
         body: JSON.stringify({
           device: selected ? (selected.dataset.name || "") : "",
           device_index: deviceIndex,
+          channel: +$("audio_channel").value,
           gain: +$("audio_gain").value,
           threshold_db: +$("audio_threshold").value,
         }),
@@ -833,6 +906,22 @@
       st.textContent = "待機中";
       st.className = "status";
     }
+    renderChannels(msg);
+  }
+
+  // 2ch インターフェースの「どっちのチャンネルに声が入っているか」を出す。
+  // ここが ch1 -60 dB / ch2 -18 dB なら、入力チャンネルを 2 にすれば直る。
+  function renderChannels(msg) {
+    const el = $("meter-channels");
+    const list = Array.isArray(msg.channels_db) ? msg.channels_db : [];
+    if (list.length < 2) { el.textContent = ""; return; }
+    const current = state.audio ? Number(state.audio.channel) : -1;
+    el.innerHTML = list.map((value, i) => {
+      const text = "ch" + (i + 1) + " " + (value <= -89 ? "-∞" : Math.round(value)) + " dB";
+      const hot = value > -50 ? ' class="hot"' : "";
+      const using = i === current ? "（使用中）" : "";
+      return "<span" + hot + ">" + text + using + "</span>";
+    }).join("");
   }
 
   setInterval(() => {
@@ -951,6 +1040,130 @@
     if (!st || !st.active) return;
     try { fillRecord(await api("/api/record")); } catch (e) {}
   }, 2000);
+
+  /* ---------------- 診断 ---------------- */
+  let diagTimer = 0;
+
+  function diagRow(label, level, value) {
+    const mark = level === "ok" ? "✓" : level === "warn" ? "!" : "✕";
+    return '<div class="diag-row ' + level + '"><span class="mark">' + mark + '</span>'
+      + "<span>" + label + "</span>"
+      + '<span class="val">' + value + "</span></div>";
+  }
+
+  function renderDiag(data) {
+    const d = data.diag || {};
+    const c = d.counters || {};
+    const cl = d.clients || {};
+    const frames = Number(c.frames || 0);
+    const age = d.last_frame_age_s;
+    const live = frames > 0 && (age === null || age === undefined || age < 3);
+    const speech = Number(d.speech_ratio || 0);
+    const calls = Number(c.asr_calls || 0);
+    const empty = Number(c.asr_empty || 0);
+    const utt = Number(c.utterances || 0);
+    const emitted = Number(c.emitted || 0);
+
+    const rows = [];
+    if (d.demo) {
+      rows.push(diagRow("デモモード（認識モデル未読込）", "ng", "実際の音声認識ではありません"));
+    }
+    rows.push(diagRow("音声が届いている",
+      live ? "ok" : "ng",
+      frames + " フレーム" + (age !== null && age !== undefined ? " ／ 最終 " + age + " 秒前" : "")));
+    rows.push(diagRow("声を検出している（VAD）",
+      speech > 0 ? "ok" : (frames > 0 ? "ng" : "warn"),
+      Math.round(speech * 100) + " % ／ しきい値 " + d.threshold_db + " dB"));
+    rows.push(diagRow("文を切り出している",
+      utt > 0 ? "ok" : (speech > 0 ? "warn" : "ng"),
+      utt + " 回"));
+    rows.push(diagRow("認識できている",
+      calls > 0 && empty < calls ? "ok" : (calls === 0 ? "warn" : "ng"),
+      calls + " 回 ／ 空 " + empty + " 回" + (c.last_asr_text ? " ／ 最終「" + c.last_asr_text + "」" : "")));
+    rows.push(diagRow("字幕を生成している",
+      emitted > 0 ? "ok" : (empty < calls ? "ng" : "warn"),
+      emitted + " 行" + (d.last_line_age_s !== null && d.last_line_age_s !== undefined ? " ／ 最終 " + d.last_line_age_s + " 秒前" : "")));
+    rows.push(diagRow("OBS（字幕ページ）が接続している",
+      Number(cl.subtitle || 0) > 0 ? "ok" : "ng",
+      "字幕 " + Number(cl.subtitle || 0) + " ／ 設定 " + Number(cl.levels || 0)));
+
+    $("diag-list").innerHTML = rows.join("");
+    const verdict = data.verdict || "";
+    $("diag-verdict").textContent = verdict || "—";
+    $("diag-verdict").className = "diag-verdict" + (live && utt > 0 && empty < calls ? "" : " ng");
+    $("diag-out").textContent = data.summary || "—";
+
+    const s = data.system || {};
+    $("diag-env").textContent = [
+      "LiveSub " + (d.version || "?"),
+      "OS: " + (s.platform || "-"),
+      "Python: " + (s.python || "-") + (s.frozen ? "（exe）" : "（ソース）"),
+      "認識: " + (d.asr || "-"),
+      "翻訳: " + (d.mt || "-"),
+      "マイク: " + (d.source || "-") + " ／ ch" + (Number(d.channel ?? 0) + 1) + " of " + (d.channel_count || 1),
+      "",
+      JSON.stringify(data.config || {}, null, 2),
+    ].join("\n");
+    setStatus($("diag-status"), "");
+  }
+
+  async function loadDiag() {
+    try {
+      renderDiag(await api("/api/diag"));
+    } catch (e) {
+      setStatus($("diag-status"), "診断情報を取得できませんでした：" + e.message, false);
+    }
+  }
+
+  function startDiagPolling() {
+    if (diagTimer) return;
+    loadDiag();
+    diagTimer = setInterval(loadDiag, 2000);
+  }
+
+  function stopDiagPolling() {
+    if (!diagTimer) return;
+    clearInterval(diagTimer);
+    diagTimer = 0;
+  }
+
+  $("diag-refresh").onclick = () => loadDiag();
+
+  $("diag-test").onclick = async () => {
+    const btn = $("diag-test");
+    btn.disabled = true;
+    setStatus($("diag-status"), "直近の音声を認識しています…");
+    try {
+      const r = await api("/api/diag/recent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seconds: 6 }),
+      });
+      const verdict = r.demo
+        ? "デモモードです（認識モデル未読込）。実際の音声認識ではありません。models\\sherpa-ja を確認してください。"
+        : r.error
+          ? "認識エンジンでエラーが出ています：" + r.error
+          : (r.text
+            ? "文字が出ました。音声と認識は正常です。字幕が出ない原因は表示側（OBS の URL・キャッシュ・シーン）の可能性が高いです。"
+            : "認識結果が空でした。マイクの入力チャンネル違い（2ch の入力2 に挿している等）か、声が小さすぎる可能性が高いです。");
+      $("diag-out").textContent = [
+        "レベル: " + r.level_db + " dB（ピーク " + r.peak_db + " dB）／ " + r.seconds + " 秒",
+        "認識結果: 「" + (r.text || "") + "」（" + r.chars + " 文字 / " + r.asr_ms + " ms）",
+        "判定: " + verdict,
+        r.wav ? "保存した音声: " + r.wav : "",
+      ].filter(Boolean).join("\n");
+      setStatus($("diag-status"), "テスト完了", true);
+    } catch (e) {
+      setStatus($("diag-status"), "テストに失敗しました：" + e.message, false);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  $("diag-bundle").onclick = () => {
+    setStatus($("diag-status"), "サポート用ファイルを作成しています…");
+    window.location.href = "/api/diag/bundle";
+  };
 
   /* ---------------- 起動 ---------------- */
   $("pv").addEventListener("load", () => { fitPreview(); pushPreview(); });

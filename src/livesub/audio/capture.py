@@ -125,7 +125,13 @@ def resolve_input_device(device: str, device_index: int = -1) -> int | None:
 
 
 class MicSource:
-    """麦克风实时采集。"""
+    """麦克风实时采集。
+
+    多通道设备（2ch 音频接口）默认只取 `channel` 指定的那一路；
+    `channel=-1` 时把所有通道平均混成一路。采集时尽量按设备的通道数打开，
+    这样设置页能分开显示每一路的电平——"电平在动但一个字都识别不出来"
+    最常见的原因就是把没插麦的那一路当成了输入。
+    """
 
     def __init__(
         self,
@@ -134,6 +140,7 @@ class MicSource:
         block_ms: int = 20,
         gain: float = 1.0,
         device_index: int = -1,
+        channel: int = 0,
     ) -> None:
         try:
             import sounddevice as sd
@@ -146,6 +153,7 @@ class MicSource:
         self.gain = float(gain)
         self.device = device  # 配置里的原始写法（空 = 系统默认），切换设备时用来回退
         self.device_index = int(device_index)
+        self.channel = int(channel)
         self._queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=400)
         self._stop = threading.Event()
         self._last_cb = time.monotonic()
@@ -154,31 +162,75 @@ class MicSource:
         device_index = resolve_input_device(device, self.device_index)
         info = sd.query_devices(device_index, kind="input")
         self.name = str(info["name"])
+        self.max_channels = max(1, int(info["max_input_channels"]))
 
         blocksize = max(1, int(sample_rate * block_ms / 1000))
-        self._stream = sd.InputStream(
-            device=device_index,
-            samplerate=sample_rate,
-            channels=1,
-            dtype="float32",
-            blocksize=blocksize,
-            latency="low",
-            callback=self._callback,
-        )
-        self._stream.start()
+        # 先按"最多能开几个通道"预分配：回调在 stream.start() 之后可能立刻触发，
+        # 那时下面的 channel_count 还没赋值，不能在这里出现 AttributeError。
+        self.channel_rms: list[float] = [0.0] * max(1, min(4, self.max_channels))
+        self._stream = self._open_stream(sd, device_index, sample_rate, blocksize)
+        self.channel_count = int(getattr(self._stream, "channels", 1) or 1)
+        del self.channel_rms[self.channel_count:]
+
+    def _open_stream(self, sd, device_index, sample_rate, blocksize):  # noqa: ANN001
+        """优先按 2ch 打开（能分通道看电平）；失败就退回单声道。
+
+        某些驱动在 16kHz/2ch 组合下会拒绝打开，而 1ch 是能用的，
+        所以这里必须能退，不能因为"想看电平"把麦克风弄成打不开。
+        """
+        want = min(2, self.max_channels)
+        if self.channel > 0:
+            want = min(4, self.max_channels, self.channel + 1)
+        attempts = [want] if want <= 1 else [want, 1]
+        last_error: Exception | None = None
+        for channels in attempts:
+            try:
+                stream = sd.InputStream(
+                    device=device_index,
+                    samplerate=sample_rate,
+                    channels=channels,
+                    dtype="float32",
+                    blocksize=blocksize,
+                    latency="low",
+                    callback=self._callback,
+                )
+                stream.start()
+                return stream
+            except Exception as exc:
+                last_error = exc
+        raise RuntimeError(f"マイクを開けませんでした：{last_error}") from last_error
 
     def _callback(self, indata, frames, time_info, status) -> None:  # noqa: ANN001
         if status:
             # 溢出/欠载只记录，不打断
             pass
         self._last_cb = time.monotonic()
-        chunk = np.asarray(indata[:, 0], dtype=np.float32).copy()
+        data = np.asarray(indata, dtype=np.float32)
+        if data.ndim == 1:
+            data = data.reshape(-1, 1)
+
+        # 各通道的电平（加增益之前）：用来判断"声音到底在哪一路"
+        for i in range(min(len(self.channel_rms), data.shape[1])):
+            block_rms = float(np.sqrt(np.mean(np.square(data[:, i], dtype=np.float32))))
+            self.channel_rms[i] = 0.85 * self.channel_rms[i] + 0.15 * block_rms
+
+        if self.channel < 0:
+            mono = data.mean(axis=1, dtype=np.float32)
+        elif self.channel < data.shape[1]:
+            mono = data[:, self.channel]
+        else:
+            mono = data[:, 0]
+        chunk = np.array(mono, dtype=np.float32, copy=True)
         if self.gain != 1.0:
             chunk *= self.gain
         try:
             self._queue.put_nowait(chunk)
         except queue.Full:
             self.dropped_blocks += 1
+
+    def channel_levels(self) -> list[float]:
+        """每一路的线性 RMS 快照（回调线程在写，复制一份再返回）。"""
+        return list(self.channel_rms)[: self.channel_count]
 
     def frames(self) -> Iterator[np.ndarray]:
         while not self._stop.is_set():

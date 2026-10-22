@@ -94,6 +94,13 @@ class Publisher:
         with self._lock:
             return list(self._history)
 
+    def client_counts(self) -> dict[str, int]:
+        """当前连着几个客户端。诊断页用它回答"OBS 到底连上没有"。"""
+        with self._lock:
+            total = len(self._clients)
+            levels = sum(1 for allow in self._clients.values() if allow)
+        return {"total": total, "levels": levels, "subtitle": total - levels}
+
     def publish(self, message: dict) -> None:
         if message.get("type") == "line":
             with self._lock:
@@ -141,17 +148,43 @@ class Pipeline:
         self._metrics = metrics
         self._status = status
         self._source_factory = source_factory
-        self._last_device: tuple[str, int] = (cfg.audio.device, cfg.audio.device_index)
+        self._last_device: tuple[str, int, int] = (
+            cfg.audio.device, cfg.audio.device_index, cfg.audio.channel
+        )
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._segmenter: Segmenter | None = None
         self._composer: SubtitleComposer | None = None
+        self._vad: EnergyVAD | None = None
+        # 诊断页会从 HTTP 线程重跑一次识别；sherpa 的同一个 recognizer 不能两线程同时解码
+        self._asr_lock = threading.Lock()
 
         self._source_lock = threading.Lock()
         self._recorder_lock = threading.Lock()
         self._recorder: SessionRecorder | None = None
         self._current_session = 0
         self._last_level_at = 0.0
+
+        # ---- 诊断用（0.5.1）：字幕が出ないとき、どこで止まったかを数える ----
+        # 这些计数是"证据"：帧数增长 → 音频到了；speech_frames → VAD 认为有人说话；
+        # utterances → 切句成功；asr_empty → 识别出来是空字符串（最容易被误当成没字幕）。
+        self._diag_lock = threading.Lock()
+        self._counters: dict[str, Any] = {
+            "frames": 0,
+            "speech_frames": 0,
+            "utterances": 0,
+            "asr_calls": 0,
+            "asr_empty": 0,
+            "emitted": 0,
+            "last_frame_ts": 0.0,
+            "last_asr_text": "",
+            "last_asr_ts": 0.0,
+            "last_line_ts": 0.0,
+            "last_empty_audio_ms": 0.0,
+        }
+        # 最近 20 秒的音频：诊断页可以拿它重跑一次识别，判断是"音频不对"还是"显示不对"
+        self._recent: deque[np.ndarray] = deque(maxlen=max(1, int(20000 / cfg.audio.block_ms)))
+        self._recent_lock = threading.Lock()
 
         self._status.source = getattr(source, "name", "unknown")
         self._status.asr = getattr(asr, "name", "unknown")
@@ -215,8 +248,20 @@ class Pipeline:
         """VAD 门限：EnergyVAD 持有同一个 Config 对象，改完下一帧生效。"""
         self._cfg.vad.threshold = float(threshold)
 
-    def switch_device(self, device: str, device_index: int = -1) -> str:
-        """热切换麦克风。返回实际打开的设备名；失败时抛异常并尽量恢复旧设备。
+    def set_channel(self, channel: int) -> None:
+        """只改通道不重开设备（设备已经按足够多的通道采集时有效）。"""
+        self._cfg.audio.channel = int(channel)
+        with self._source_lock:
+            source = self._source
+        if hasattr(source, "channel"):
+            try:
+                source.channel = int(channel)
+            except Exception:
+                pass
+
+    def switch_device(self, device: str, device_index: int = -1,
+                      channel: int | None = None) -> str:
+        """热切换麦克风（也可以只换输入通道）。返回实际打开的设备名；失败时抛异常并尽量恢复旧设备。
 
         先关旧设备再开新设备：Windows 上很多麦克风是独占的，同时开两个会失败。
         打开失败会立刻用旧设备重建，保证直播不中断（只是可能有几十毫秒的空隙）。
@@ -224,6 +269,7 @@ class Pipeline:
         if self._source_factory is None:
             raise RuntimeError("WAV／合成音声モードではマイクを切り替えられません")
 
+        want_channel = self._cfg.audio.channel if channel is None else int(channel)
         with self._source_lock:
             old = self._source
             previous = self._last_device
@@ -232,7 +278,7 @@ class Pipeline:
             except Exception:
                 pass
             try:
-                new = self._source_factory(str(device or ""), int(device_index))
+                new = self._source_factory(str(device or ""), int(device_index), want_channel)
             except Exception as exc:
                 # 回退：用旧设备重建，别把正在跑的 pipeline 留在「没有输入」的状态
                 try:
@@ -244,7 +290,7 @@ class Pipeline:
                 raise RuntimeError(f"マイクを開けませんでした：{exc}") from exc
 
             self._source = new
-            self._last_device = (str(device or ""), int(device_index))
+            self._last_device = (str(device or ""), int(device_index), want_channel)
             self._status.source = getattr(new, "name", "unknown")
             self._status.last_error = ""
         self._publish_status()
@@ -366,6 +412,7 @@ class Pipeline:
                 recorder.start_part(0.0)
 
         vad = EnergyVAD(self._cfg.vad)
+        self._vad = vad
         seg = Segmenter(self._cfg.vad, source.sample_rate, self._cfg.audio.block_ms)
         self._segmenter = seg
         composer = SubtitleComposer(
@@ -380,7 +427,9 @@ class Pipeline:
             for frame in source.frames():
                 if self._stop.is_set():
                     break
+                self._push_recent(frame)
                 speech = vad.is_speech(frame)
+                self._note_frame(speech)
                 self._publish_level(vad, speech)
                 utterance = seg.feed(frame, speech)
                 recorder = self._recorder
@@ -430,6 +479,7 @@ class Pipeline:
 
     def _handle(self, utt: Utterance) -> None:
         """一段声学切句 → 识别 → 交给 composer 决定"现在出还是等一等"。"""
+        self._bump("utterances")
         if self._segmenter is not None:
             # 直播过程中也要能看到，否则排障时 dropped 永远是 0
             self._metrics.dropped_segments = self._segmenter.dropped
@@ -442,12 +492,21 @@ class Pipeline:
         t_start = time.perf_counter()
         ja = ""
         try:
-            result = self._asr.transcribe(audio, sample_rate)
+            with self._asr_lock:
+                result = self._asr.transcribe(audio, sample_rate)
             ja = (result.text or "").strip()
         except Exception as exc:
             self._metrics.errors += 1
             self._status.last_error = f"ASR: {type(exc).__name__}: {exc}"
             self._pub.publish({"type": "error", "message": self._status.last_error})
+        audio_ms = round(len(audio) / max(1, sample_rate) * 1000.0, 1)
+        with self._diag_lock:
+            self._counters["asr_calls"] += 1
+            self._counters["last_asr_text"] = ja
+            self._counters["last_asr_ts"] = time.perf_counter()
+            if not ja:
+                self._counters["asr_empty"] += 1
+                self._counters["last_empty_audio_ms"] = audio_ms
         return ja, (time.perf_counter() - t_start) * 1000.0
 
     def _emit_line(self, line: ComposedLine) -> None:
@@ -497,6 +556,9 @@ class Pipeline:
         }
         self._pub.publish(message)
         self._write_log(message)
+        with self._diag_lock:
+            self._counters["emitted"] += 1
+            self._counters["last_line_ts"] = time.perf_counter()
 
         recorder = self._recorder
         if recorder is not None:
@@ -512,6 +574,15 @@ class Pipeline:
             return
         self._last_level_at = now
         rms = float(vad.last_rms)
+        # 分通道电平（加增益之前）：2ch 接口上"声音在哪一路"一眼就能看出来。
+        # 字幕页收不到 level，所以多这几个字段不影响 OBS。
+        channels_db: list[float] = []
+        levels_fn = getattr(self._source, "channel_levels", None)
+        if callable(levels_fn):
+            try:
+                channels_db = [round(rms_to_db(v), 1) for v in levels_fn()]
+            except Exception:
+                channels_db = []
         self._pub.publish(
             {
                 "type": "level",
@@ -519,6 +590,8 @@ class Pipeline:
                 "db": round(rms_to_db(rms), 1),
                 "threshold_db": round(rms_to_db(vad.effective_threshold), 1),
                 "speech": bool(speech),
+                "channels": len(channels_db),
+                "channels_db": channels_db,
             }
         )
 
@@ -530,6 +603,113 @@ class Pipeline:
         self._metrics.dropped_fillers = stats["dropped_fillers"]
         self._metrics.held_segments = stats["held"]
         self._metrics.hold_timeouts = stats["hold_timeouts"]
+
+    # ---------- 诊断（0.5.1） ----------
+    #
+    # 设计目标：不用看控制台、不用远程桌面，也能回答"字幕在哪一步断的"。
+    # 计数器全部在 pipeline 线程里更新，HTTP 线程只读快照。
+
+    def _bump(self, key: str, n: int = 1) -> None:
+        with self._diag_lock:
+            self._counters[key] = int(self._counters.get(key, 0)) + n
+
+    def _note_frame(self, speech: bool) -> None:
+        with self._diag_lock:
+            self._counters["frames"] += 1
+            self._counters["last_frame_ts"] = time.perf_counter()
+            if speech:
+                self._counters["speech_frames"] += 1
+
+    def _push_recent(self, frame: np.ndarray) -> None:
+        with self._recent_lock:
+            self._recent.append(frame)
+
+    def recent_audio(self, seconds: float = 6.0) -> tuple[np.ndarray, int]:
+        """最近 N 秒的音频（诊断页拿它重跑识别）。返回 (audio, sample_rate)。"""
+        rate = int(getattr(self._source, "sample_rate", self._cfg.audio.sample_rate))
+        need = max(1, int(seconds * rate))
+        with self._recent_lock:
+            frames = list(self._recent)
+        picked: list[np.ndarray] = []
+        total = 0
+        for frame in reversed(frames):
+            picked.append(frame)
+            total += len(frame)
+            if total >= need:
+                break
+        if not picked:
+            return np.zeros(0, dtype=np.float32), rate
+        audio = np.concatenate(list(reversed(picked)))
+        return audio[-need:], rate
+
+    def diag(self) -> dict[str, Any]:
+        """给 /api/diag 和诊断页用的快照。"""
+        src = self._source
+        vad = self._vad
+        now = time.perf_counter()
+        with self._diag_lock:
+            counters = dict(self._counters)
+        with self._recent_lock:
+            recent_frames = list(self._recent)
+        rate = max(1, int(getattr(src, "sample_rate", self._cfg.audio.sample_rate)))
+        recent_s = sum(len(f) for f in recent_frames) / rate
+
+        channels_db: list[float] = []
+        levels_fn = getattr(src, "channel_levels", None)
+        if callable(levels_fn):
+            try:
+                channels_db = [round(rms_to_db(v), 1) for v in levels_fn()]
+            except Exception:
+                channels_db = []
+
+        frames = int(counters.get("frames", 0))
+        speech = int(counters.get("speech_frames", 0))
+        last_frame_ts = float(counters.get("last_frame_ts", 0.0))
+        last_asr_ts = float(counters.get("last_asr_ts", 0.0))
+        last_line_ts = float(counters.get("last_line_ts", 0.0))
+        return {
+            "version": __version__,
+            "uptime_s": round(now - self._status.started_at, 1) if self._status.started_at else 0.0,
+            "running": self._status.running,
+            "source": self._status.source,
+            "device": self._cfg.audio.device,
+            "device_index": self._cfg.audio.device_index,
+            "channel": getattr(src, "channel", self._cfg.audio.channel),
+            "channel_count": int(getattr(src, "channel_count", 1) or 1),
+            "channels_db": channels_db,
+            "sample_rate": rate,
+            "gain": self._cfg.audio.gain,
+            "level_db": round(rms_to_db(vad.last_rms), 1) if vad is not None else None,
+            "threshold_db": round(
+                rms_to_db(vad.effective_threshold if vad is not None else self._cfg.vad.threshold), 1
+            ),
+            "asr": self._status.asr,
+            "mt": self._status.mt,
+            "demo": self._status.demo,
+            "counters": counters,
+            "speech_ratio": round(speech / frames, 3) if frames else 0.0,
+            "last_frame_age_s": round(now - last_frame_ts, 1) if last_frame_ts else None,
+            "last_asr_age_s": round(now - last_asr_ts, 1) if last_asr_ts else None,
+            "last_line_age_s": round(now - last_line_ts, 1) if last_line_ts else None,
+            "clients": self._pub.client_counts(),
+            "recent_audio_s": round(recent_s, 1),
+            "last_error": self._status.last_error,
+            "recording": bool(self._status.recording),
+        }
+
+    @property
+    def asr(self) -> Any:
+        """识别引擎（诊断页的"重跑一次识别"要用）。"""
+        return self._asr
+
+    def transcribe_now(self, audio: np.ndarray, sample_rate: int) -> Any:
+        """从别的线程单独跑一次识别（诊断用），与流水线互斥。"""
+        with self._asr_lock:
+            return self._asr.transcribe(audio, sample_rate)
+
+    @property
+    def log_path(self) -> Path:
+        return self._log_path
 
     # ---------- 记录 ----------
 

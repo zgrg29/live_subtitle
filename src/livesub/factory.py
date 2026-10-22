@@ -19,6 +19,7 @@ def build_source(
     synthetic_seconds: float | None = None,
     device: str | None = None,
     device_index: int | None = None,
+    channel: int | None = None,
 ) -> AudioSource:
     if wav:
         # 实时回放：这样测出来的延迟才是真实延迟
@@ -30,6 +31,7 @@ def build_source(
     return MicSource(
         device=cfg.audio.device if device is None else device,
         device_index=cfg.audio.device_index if device_index is None else device_index,
+        channel=cfg.audio.channel if channel is None else channel,
         sample_rate=cfg.audio.sample_rate,
         block_ms=cfg.audio.block_ms,
         gain=cfg.audio.gain,

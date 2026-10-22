@@ -8,11 +8,20 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import json
+import os
+import platform
+import sys
 import time
+import wave
+import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -43,6 +52,76 @@ def _clamp(value, low: float, high: float, default: float) -> float:
     if number != number:  # NaN
         return default
     return max(low, min(high, number))
+
+
+def _wav_bytes(audio, sample_rate: int) -> bytes:
+    """float32 单声道 → 16bit PCM WAV 字节（诊断页打包/试听用）。"""
+    pcm = np.clip(np.asarray(audio, dtype=np.float32), -1.0, 1.0)
+    pcm16 = (pcm * 32767.0).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as fh:
+        fh.setnchannels(1)
+        fh.setsampwidth(2)
+        fh.setframerate(int(sample_rate))
+        fh.writeframes(pcm16.tobytes())
+    return buf.getvalue()
+
+
+def _diag_verdict(diag: dict) -> str:
+    """按"断在哪一步"给一句人话。顺序就是信号链的顺序。"""
+    counters = diag.get("counters") or {}
+    frames = int(counters.get("frames", 0))
+    asr_calls = int(counters.get("asr_calls", 0))
+    asr_empty = int(counters.get("asr_empty", 0))
+    emitted = int(counters.get("emitted", 0))
+    age = diag.get("last_frame_age_s")
+    clients = diag.get("clients") or {}
+
+    if not diag.get("running"):
+        return "パイプラインが止まっています（起動直後か、マイクでエラーが出ています）"
+    if frames == 0 or (age is not None and age > 3):
+        return "音声が届いていません（マイクが他のアプリに使われている／抜けている）"
+    if float(diag.get("speech_ratio") or 0) <= 0.0:
+        return ("音声は届いていますが、まだ VAD が声を検出していません"
+                "（しきい値が高い／ミュート／まだ話していない、のいずれか）")
+    if int(counters.get("utterances", 0)) == 0:
+        return "声は拾えていますが、文の区切りができていません（短い声だけ／しきい値ぎりぎり）"
+    if asr_calls > 0 and asr_empty >= asr_calls:
+        return ("認識結果が空です。マイクの入力チャンネル違い（2ch の入力2 に挿している等）か、"
+                "音楽・ノイズしか入っていない可能性が高いです")
+    if emitted == 0:
+        return "認識はできていますが、字幕として配信されていません（統合待ち／翻訳で停止）"
+    if int(clients.get("subtitle", 0)) == 0:
+        return "字幕は生成されていますが、OBS の字幕ページが接続していません（URL／ポート／キャッシュ）"
+    return "正常に動いています"
+
+
+def _diag_summary_text(diag: dict) -> str:
+    """人が読む 1 枚のレポート。サポートにそのまま貼れる形にする。"""
+    counters = diag.get("counters") or {}
+    clients = diag.get("clients") or {}
+    channels = diag.get("channels_db") or []
+    channel_text = " / ".join(f"ch{i + 1} {db:+.0f} dB" for i, db in enumerate(channels)) or "-"
+    selected = int(diag.get("channel") if diag.get("channel") is not None else 0)
+    channel_label = "全chミックス" if selected < 0 else f"ch{selected + 1}"
+    return "\n".join(
+        [
+            "LiveSub 診断レポート",
+            f"version: {diag.get('version')}   稼働: {diag.get('uptime_s')} 秒",
+            f"マイク: {diag.get('source')}（{diag.get('channel_count')}ch、使用 {channel_label}）",
+            f"チャンネル別レベル: {channel_text}",
+            f"入力: フレーム {counters.get('frames', 0)} / 最終 {diag.get('last_frame_age_s')} 秒前 / 現在 {diag.get('level_db')} dB",
+            f"VAD: 発話 {float(diag.get('speech_ratio') or 0) * 100:.0f}% / しきい値 {diag.get('threshold_db')} dB",
+            f"切句: {counters.get('utterances', 0)} 回",
+            f"認識: {counters.get('asr_calls', 0)} 回 / 空 {counters.get('asr_empty', 0)} 回 / 最終「{counters.get('last_asr_text', '')}」",
+            f"字幕: {counters.get('emitted', 0)} 行 / 最終 {diag.get('last_line_age_s')} 秒前",
+            f"接続: 字幕ページ {clients.get('subtitle', 0)} / 設定ページ {clients.get('levels', 0)}",
+            f"直近のエラー: {diag.get('last_error') or 'なし'}",
+            "",
+            f"判定: {_diag_verdict(diag)}",
+            "",
+        ]
+    )
 
 
 @dataclass
@@ -137,12 +216,13 @@ def create_app(runtime: Runtime) -> FastAPI:
             "devices": devices,
             "default_device": default_name,
             "source": runtime.status.source,
+            "channel_count": int(runtime.pipeline.diag().get("channel_count", 1)),
             "error": error,
         }
 
     @app.post("/api/audio")
     async def api_save_audio(payload: dict) -> dict:
-        """保存并立即应用麦克风 / 增益 / 门限，不需要重启。"""
+        """保存并立即应用麦克风 / 通道 / 增益 / 门限，不需要重启。"""
         cfg = runtime.cfg
         has_device = "device" in payload or "device_index" in payload
         device = str(payload.get("device") or "") if has_device else cfg.audio.device
@@ -151,17 +231,23 @@ def create_app(runtime: Runtime) -> FastAPI:
         except (TypeError, ValueError):
             device_index = -1
         device_index = max(-1, device_index)
+        channel = (
+            int(_clamp(payload.get("channel"), -1, 7, cfg.audio.channel))
+            if "channel" in payload
+            else cfg.audio.channel
+        )
 
-        if has_device and (device, device_index) != (cfg.audio.device, cfg.audio.device_index):
+        if (device, device_index, channel) != (cfg.audio.device, cfg.audio.device_index, cfg.audio.channel):
             try:
                 await run_in_threadpool(
-                    runtime.pipeline.switch_device, device, device_index
+                    runtime.pipeline.switch_device, device, device_index, channel
                 )
             except Exception as exc:
                 # 打不开就保留旧设备（switch_device 内部已经回退），配置也不落盘
                 return JSONResponse({"error": str(exc)}, status_code=400)
             cfg.audio.device = device
             cfg.audio.device_index = device_index
+            cfg.audio.channel = channel
 
         if "gain" in payload:
             gain = _clamp(payload.get("gain"), 0.1, 8.0, cfg.audio.gain)
@@ -178,6 +264,7 @@ def create_app(runtime: Runtime) -> FastAPI:
                 {
                     "device": cfg.audio.device,
                     "device_index": cfg.audio.device_index,
+                    "channel": cfg.audio.channel,
                     "gain": cfg.audio.gain,
                 },
             )
@@ -301,6 +388,140 @@ def create_app(runtime: Runtime) -> FastAPI:
     @app.get("/api/metrics")
     async def api_metrics() -> dict:
         return runtime.metrics.summary()
+
+    # ---------------- 診断（0.5.1） ----------------
+
+    @app.get("/api/diag")
+    async def api_diag() -> dict:
+        """一台机器上"字幕が出ない"ときの一次情報。全部ローカル、外部送信なし。"""
+        cfg = runtime.cfg
+        diag = runtime.pipeline.diag()
+        return {
+            "ok": True,
+            "diag": diag,
+            "metrics": runtime.metrics.summary(),
+            "config": {
+                "audio": asdict_audio(cfg),
+                "asr": {
+                    "engine": cfg.asr.engine,
+                    "model_dir": cfg.asr.model_dir,
+                    "num_threads": cfg.asr.num_threads,
+                },
+                "mt": {"engine": cfg.mt.engine, "model_dir": cfg.mt.model_dir},
+                "segment": {"merge": cfg.segment.merge, "merge_wait_ms": cfg.segment.merge_wait_ms},
+                "overlay": {"clear_after_ms": cfg.overlay.clear_after_ms},
+                "record": {"enabled": cfg.record.enabled},
+            },
+            "system": {
+                "platform": platform.platform(),
+                "python": sys.version.split()[0],
+                "frozen": bool(getattr(sys, "frozen", False)),
+                "pid": os.getpid(),
+            },
+            "verdict": _diag_verdict(diag),
+            "summary": _diag_summary_text(diag),
+        }
+
+    @app.post("/api/diag/recent")
+    async def api_diag_recent(payload: dict | None = None) -> dict:
+        """直近数秒を認識し直す。「音声が悪い」のか「表示が悪い」のかを切り分ける。
+
+        音声は pipeline が実際に受け取ったものを使うので、OBS や WS とは無関係に
+        「認識エンジンがこの音声から文字を出せるか」だけを測れる。
+        """
+        body = payload or {}
+        seconds = _clamp(body.get("seconds", 6.0), 1.0, 20.0, 6.0)
+        audio, rate = await run_in_threadpool(runtime.pipeline.recent_audio, seconds)
+        if audio.size == 0:
+            return JSONResponse(
+                {"error": "まだ音声が届いていません。マイクに向かって話してから、もう一度試してください。"},
+                status_code=409,
+            )
+
+        rms = float(np.sqrt(np.mean(np.square(audio, dtype=np.float32))))
+        peak = float(np.max(np.abs(audio)))
+        started = time.perf_counter()
+        text = ""
+        error = ""
+        try:
+            result = await run_in_threadpool(runtime.pipeline.transcribe_now, audio, rate)
+            text = (result.text or "").strip()
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+        asr_ms = (time.perf_counter() - started) * 1000.0
+
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        wav_path: Path | None = runtime.pipeline.log_path.parent / f"diag-recent-{stamp}.wav"
+        try:
+            wav_path.parent.mkdir(parents=True, exist_ok=True)
+            wav_path.write_bytes(_wav_bytes(audio, rate))
+        except OSError:
+            wav_path = None
+
+        return {
+            "ok": True,
+            "seconds": round(len(audio) / rate, 2),
+            "level_db": round(rms_to_db(rms), 1),
+            "peak_db": round(rms_to_db(peak), 1),
+            "text": text,
+            "chars": len(text),
+            "asr_ms": round(asr_ms, 1),
+            "error": error,
+            "demo": bool(runtime.status.demo),
+            "wav": str(wav_path) if wav_path else "",
+        }
+
+    @app.get("/api/diag/bundle")
+    async def api_diag_bundle() -> Response:
+        """サポート用の 1 ファイル（zip）。ユーザーはこれを送るだけでよい。"""
+        diag = runtime.pipeline.diag()
+        snapshot = {
+            "ok": True,
+            "diag": diag,
+            "metrics": runtime.metrics.summary(),
+            "summary": _diag_summary_text(diag),
+            "system": {
+                "platform": platform.platform(),
+                "python": sys.version.split()[0],
+                "frozen": bool(getattr(sys, "frozen", False)),
+                "pid": os.getpid(),
+            },
+            "config": {
+                "audio": asdict_audio(runtime.cfg),
+                "asr": {"engine": runtime.cfg.asr.engine, "model_dir": runtime.cfg.asr.model_dir},
+                "mt": {"engine": runtime.cfg.mt.engine, "model_dir": runtime.cfg.mt.model_dir},
+            },
+        }
+        audio, rate = runtime.pipeline.recent_audio(10.0)
+        log_lines: list[str] = []
+        try:
+            if runtime.pipeline.log_path.exists():
+                log_lines = runtime.pipeline.log_path.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()[-200:]
+        except OSError:
+            pass
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("diag.json", json.dumps(snapshot, ensure_ascii=False, indent=2))
+            zf.writestr("summary.txt", snapshot["summary"])
+            zf.writestr("session.jsonl", "\n".join(log_lines))
+            if audio.size:
+                zf.writestr("recent-10s.wav", _wav_bytes(audio, rate))
+            config_file = Path(runtime.config_path or CONFIG_FILENAME)
+            try:
+                if config_file.exists():
+                    zf.writestr("config.toml", config_file.read_text(encoding="utf-8-sig"))
+            except OSError:
+                pass
+
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="livesub-diag-{stamp}.zip"'},
+        )
 
     @app.get("/api/history")
     async def api_history() -> dict:

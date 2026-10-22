@@ -10,6 +10,33 @@
 `dist\LiveSub-0.5.0\`（602MB，含两个模型，`--version` 显示 0.5.0）+
 `dist\LiveSub-0.5.0-win64.zip`（约 356MB，SHA 见 `docs\PROGRESS.md`）。
 
+## 0.5.1（诊断版，2026-10-22）
+
+起因：有主播反馈 **0.5.0 里"电平条在动、字幕一个字都不出"**，而开发机完全正常。
+截图证据是：level -28 dB、VAD 显示「発話を検出」、设备为 2ch 的
+`In 1-2 (MOTU M Series)`、增益 3.8×、门限 -65 dB。→ 音频已经走到 VAD，问题在它后面。
+
+0.5.1 做的事（详见 [docs/DEBUG-NO-SUBTITLE.md](docs/DEBUG-NO-SUBTITLE.md)）：
+
+1. **设置页「診断」tab**：把 音声→VAD→切句→ASR→字幕→OBS 连接 六段做成 ✓/!/✕，
+   末尾给一行「判定」；「直近6秒で認識テスト」用 pipeline 真实收到的音频重跑一次 ASR，
+   直接区分"音频不对"还是"显示不对"；「サポート用ファイルを保存」导出 zip
+   （diag.json + summary.txt + config.toml + recent-10s.wav + 日志末尾，不联网）。
+2. **输入通道**：`audio.channel`（0 基，-1=全混）。2ch 接口把麦克风插在输入 2 时，
+   旧版只看 ch0 → 电平有、声音没有 → ASR 返回空串 → 什么都不显示。默认仍是 0，老用户路径不变；
+   `MicSource` 会尽量按 2ch 打开并给出 ch 别电平，打不开自动退回 1ch。
+3. **空识别可见**：新增 `asr_empty` 计数，诊断页/`/api/diag` 能看出"切句有了但 ASR 全是空"。
+4. **新增 API**：`/api/diag`、`/api/diag/recent`、`/api/diag/bundle`。
+5. 版本号 0.5.1；`使い方.txt` 增加诊断与通道说明；单测 75 → **84 个**。
+
+排查顺序（给主播的脚本）在 `docs/DEBUG-NO-SUBTITLE.md` 第 4 节，含日语回复模板。
+
+打包与验收（2026-10-22）：`dist\LiveSub-0.5.1\`（602MB / 2,751 files）+
+`dist\LiveSub-0.5.1-win64.zip`（373,362,486 bytes / 356.1MB，SHA256
+`96C5BF3D53DC1E763A6A2C3A87693186E034873F4BBBD99FDBCF911AF09D2BED`）。
+绿色版用 0.5.0 旧配置启动、真实麦克风、真实模型 WAV、通道热切换、诊断接口与支持包均已验证，
+见 [docs/ACCEPTANCE-0.5.1.md](docs/ACCEPTANCE-0.5.1.md)。
+
 **0.5.0 的关键变化**（都是用户/主播直接提的反馈）：
 
 1. **字幕自动清屏**：`overlay.clear_after_ms` 默认 5000ms；新句子重置计时，长句按字数自动延长（最多 15s），
@@ -235,6 +262,8 @@ zip `dist\LiveSub-0.5.0-win64.zip`（373,004,176 bytes / 355.7MB），SHA256
 | 上屏内容/时机 | `src/livesub/pipeline.py::_emit_line`（何时出由 `composer.py` 决定） |
 | 字幕样式 / 静默清屏 | `overlay/index.html` 的 CSS 变量 + `scheduleClear/fadeOutAll` + `config.py::OverlayConfig` |
 | 麦克风选择 / 电平条 | `overlay/admin.html` 音声 tab + `server.py::/api/audio` + `pipeline.py::switch_device` |
+| 2ch 接口选输入通道 | `config.py::AudioConfig.channel` + `audio/capture.py::MicSource` |
+| "没字幕"怎么定位 | `pipeline.py::diag()` + `server.py::/api/diag*` + admin 診断 tab（见 `docs/DEBUG-NO-SUBTITLE.md`） |
 | 记录（默认关） | `src/livesub/record.py` + `pipeline.py::set_recording` + `server.py::/api/record` |
 | 启动自动开设置页 | `__main__.py::_open_admin_when_ready` + `config.py::UiConfig` |
 | 打包 | `tools/build_exe.py` |
@@ -260,6 +289,11 @@ zip `dist\LiveSub-0.5.0-win64.zip`（373,004,176 bytes / 355.7MB），SHA256
    打开失败必须在 `switch_device` 里用旧设备重建，不能把 pipeline 留在「没有输入」的状态。
 11. **录音偏移是音频时间轴，不是墙钟**：`lines.jsonl` 的 `start_s`/`end_s` 相对当前
    `audio-XXX.wav` 的 part 起点；设备切换会开新 part，偏移从 0 重新算。
+12. **`audio.channel` 默认必须是 0**：2ch 接口把麦插在输入 2 时，只取 ch0 会得到
+   "电平在动、ASR 返回空"——这正是 0.5.0 用户报的故障。`MicSource` 会尽量按 2ch 打开
+   （为了显示 ch 别电平），打不开必须退回 1ch，不能让麦克风反而打不开。
+13. **`asr_empty` 不是"没声音"**：空识别在 0.5.0 之前完全静默（composer 直接丢），
+   诊断页靠这个计数区分"VAD 没触发"和"触发了但识别为空"。
 
 另外：**字幕页是热更新的**——改 `overlay/index.html` 后复制到
 `dist/LiveSub/_internal/overlay/index.html`，OBS 右键刷新即可；只有 Python 改动才要重打包。

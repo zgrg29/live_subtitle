@@ -738,6 +738,62 @@ Release 标题/正文/checklist 见 `dist\RELEASE_FIELDS.md` 与 `dist\RELEASE_B
 `v0.5.0`（`164dbf6`）已于 2026-10-22 推送到 origin；只剩 GitHub 网页上建 Release。
 之后回到 **ASR 侧热词** 与真人麦克风基线（见 HANDOFF）。
 
+## 2026-10-22：0.5.1（诊断版）——「电平在动，字幕不出」
 
+### 报告与推断
 
+主播反馈 0.5.0「音声の入力レベルは動くんだけど字幕動かない」，开发机完全正常。
+对方发来的设置页截图里有三条关键信息：
 
+- 电平 **-28 dB**，状态是「発話を検出」→ 音频已经进了 pipeline，VAD 也过了；
+- 设备是 **In 1-2 (MOTU M Series) (2ch)**（2ch 音频接口）；
+- 增益 **3.8×**、门限 **-65 dB**（调到底）——这是"以为声音小"的补救，不是原因。
+
+VAD 之后只剩四步：切句 → ASR → composer → WS/OBS。0.5.0 没动切句，overlay 的 diff 也只有
+自动清屏 3 处，所以最可疑的是 **ASR 返回空串**：`composer` 会静默丢掉，屏幕上什么都不会有，
+`metrics` 里也看不出来。
+
+再看实现：`MicSource` 写死 `indata[:, 0]`。2ch 接口把麦克风插在 **输入 2** 时，第 1 路只有串音：
+电平会动、VAD 能触发、ASR 拿到的是噪声 → 空串 → 没有任何字幕。开发机是 1ch USB 麦，
+所以永远复现不了。
+
+### 做法：先让故障自己说话
+
+没有直接改猜测，而是先把"信号链的每一段"变成可观测的：
+
+1. `Pipeline` 增加计数：`frames` / `speech_frames` / `utterances` / `asr_calls` / **`asr_empty`** /
+   `emitted`，外加 `last_frame_age_s`、`clients`（字幕页 / 设置页连接数）。
+2. 保留最近 20 秒音频（`_recent`，约 1.2MB），诊断页可以拿它**重跑一次 ASR**：
+   出字 = 音频/识别正常，问题在显示；不出字 = 音频侧问题。这一步把"猜"变成"测"。
+3. 设置页新增「診断」tab：六段 ✓/!/✕ + 一行判定；`/api/diag`、`/api/diag/recent` 暴露同样的数据。
+4. 「サポート用ファイルを保存」：`diag.json` + `summary.txt` + `config.toml` + 直近 10 秒 WAV +
+   日志末尾打成一个 zip。**不自动上传**，用户自己决定发不发。
+5. 顺手修根因：`audio.channel`（0 基，-1=全混）。`MicSource` 尽量按 2ch 打开（为了分通道电平），
+   打不开自动退回 1ch；默认仍是 0，老配置行为不变。
+6. `_diag_verdict` 把结论按信号链顺序写死（音声 → VAD → 切句 → 识别 → 字幕 → OBS），
+   并在单测里固定分支，避免以后改文案改出误判。
+
+### 验收
+
+详见 [ACCEPTANCE-0.5.1.md](ACCEPTANCE-0.5.1.md)。摘要：
+
+- 单测 **84 个全绿**（新增 9 个：ch2 选择、增益、混音、1ch 回退、空识别可见、判定分支…）；
+- 绿色版用 **0.5.0 的 config.toml** 启动正常（`channel` 缺省 0），frames 3 秒 422 → 575；
+- `POST /api/audio {"channel":-1}` → 200，切完继续出帧，配置写入 `channel = -1`，再切回 0；
+- `/api/diag/recent` 返回电平/文本/WAV；`/api/diag/bundle` 90,908 bytes，5 个文件；
+- `--wav models/test_wavs/3.wav` 真实模型跑通：「ヤンバルクイナ…」→「与Yambarquina的相遇是在18岁的时候。」；
+- 产物：`dist\LiveSub-0.5.1\`（602MB）+ `LiveSub-0.5.1-win64.zip`（373,362,486 bytes，
+  SHA256 `96C5BF3D53DC1E763A6A2C3A87693186E034873F4BBBD99FDBCF911AF09D2BED`）。
+
+### 还没证明的
+
+- **没有在真正 2ch 接口上复现**：`channel=1` 只被 fake sounddevice 单测覆盖。
+  如果主播的诊断结果不是通道问题，zip 里的 `recent-10s.wav` 是下一步的证据。
+- 诊断 tab 没做浏览器实渲染（headless Edge 被本机沙箱拦），只做了 JS 语法 + DOM 字符串 + 接口验证。
+- 真人麦克风 CER / OBS 10 分钟渲染仍未点检。
+
+### 经验
+
+- **"电平在动"只能证明采集和 VAD，不能证明识别**。以后排障先问"诊断页的 asr_calls / asr_empty"。
+- **空结果必须有计数**。没有计数的失败，在远程排障里等于不存在。
+- **多通道设备是默认假设之外的世界**：单声道开发机上的"显然正确"，在 2ch 接口上就是静音。

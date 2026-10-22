@@ -61,6 +61,19 @@ class AudioSettingConfigTest(unittest.TestCase):
         self.assertTrue(cfg.ui.open_admin)
         self.assertFalse(cfg.record.enabled)
         self.assertEqual(cfg.record.max_minutes, 60)
+        self.assertEqual(cfg.audio.channel, 0)
+
+    def test_channel_is_clamped(self) -> None:
+        from livesub.config import _validate
+
+        cfg = Config()
+        cfg.audio.channel = 99  # type: ignore[assignment]
+        _validate(cfg)
+        self.assertEqual(cfg.audio.channel, 7)
+
+        cfg.audio.channel = -9  # type: ignore[assignment]
+        _validate(cfg)
+        self.assertEqual(cfg.audio.channel, -1)
 
     def test_out_of_range_values_are_clamped(self) -> None:
         cfg = Config()
@@ -81,7 +94,7 @@ class AudioSettingConfigTest(unittest.TestCase):
     def test_generated_config_has_new_sections(self) -> None:
         text = to_toml(Config())
         for needle in ("clear_after_ms = 5000", "[ui]", "[record]", "open_admin = true",
-                       "enabled = false", "マイク"):
+                       "enabled = false", "マイク", "channel = 0"):
             self.assertIn(needle, text)
 
     def test_save_section_keeps_other_sections(self) -> None:
@@ -222,6 +235,178 @@ class RecordingPipelineTest(unittest.TestCase):
             self.assertFalse(pipeline.recording_state()["active"])
 
 
+class MicChannelSelectionTest(unittest.TestCase):
+    """2ch インターフェースで「入力2」を選べるか（0.5.1 の本命の修正）。
+
+    ここが壊れると「レベルは動くのに字幕が出ない」に戻る。
+    """
+
+    def _fake_sounddevice(self, channels: int = 2):
+        import types
+
+        class FakeStream:
+            def __init__(self, **kwargs) -> None:
+                self.channels = int(kwargs["channels"])
+                self.callback = kwargs["callback"]
+                self.started = False
+
+            def start(self) -> None:
+                self.started = True
+
+            def stop(self) -> None:
+                self.started = False
+
+            def close(self) -> None:
+                pass
+
+        mod = types.ModuleType("sounddevice")
+        mod.InputStream = lambda **kw: FakeStream(**kw)
+        mod.query_devices = lambda device=None, kind=None: {
+            "name": "Fake 2ch Interface",
+            "max_input_channels": channels,
+        }
+        mod.default = types.SimpleNamespace(device=(0, 0))
+        return mod
+
+    def _source(self, channel: int, channels: int = 2, gain: float = 1.0):
+        import sys
+
+        fake = self._fake_sounddevice(channels)
+        original = sys.modules.get("sounddevice")
+        sys.modules["sounddevice"] = fake
+        try:
+            from livesub.audio.capture import MicSource
+
+            return MicSource(device="", channel=channel, gain=gain)
+        finally:
+            if original is None:
+                sys.modules.pop("sounddevice", None)
+            else:
+                sys.modules["sounddevice"] = original
+
+    @staticmethod
+    def _feed(source, values: list[float]) -> None:
+        data = np.zeros((320, len(values)), dtype=np.float32)
+        for i, value in enumerate(values):
+            data[:, i] = value
+        source._callback(data, 320, None, None)
+
+    def test_second_channel_is_used(self) -> None:
+        src = self._source(channel=1)
+        self.assertEqual(src.channel_count, 2)
+        self._feed(src, [0.0, 0.5])
+        frame = next(src.frames())
+        self.assertAlmostEqual(float(np.max(np.abs(frame))), 0.5, places=3)
+        levels = src.channel_levels()
+        self.assertEqual(len(levels), 2)
+        self.assertGreater(levels[1], levels[0])
+        src.close()
+
+    def test_gain_applies_to_selected_channel(self) -> None:
+        src = self._source(channel=1, gain=2.0)
+        self._feed(src, [0.0, 0.25])
+        self.assertAlmostEqual(float(np.max(np.abs(next(src.frames())))), 0.5, places=3)
+        src.close()
+
+    def test_mix_mode_averages_channels(self) -> None:
+        src = self._source(channel=-1)
+        self.assertEqual(src.channel_count, 2)
+        self._feed(src, [0.2, 0.4])
+        self.assertAlmostEqual(float(next(src.frames())[0]), 0.3, places=3)
+        src.close()
+
+    def test_mono_device_still_opens_one_channel(self) -> None:
+        src = self._source(channel=0, channels=1)
+        self.assertEqual(src.channel_count, 1)
+        self.assertEqual(len(src.channel_levels()), 1)
+        src.close()
+
+
+class PipelineDiagTest(unittest.TestCase):
+    def _pipeline(self, tmp, asr=None):
+        cfg = Config()
+        cfg.mt.engine = "echo"
+        source = SyntheticSource(4.0, sample_rate=cfg.audio.sample_rate,
+                                 block_ms=cfg.audio.block_ms)
+        publisher = Publisher()
+        pipeline = Pipeline(cfg, source, asr or ScriptedASR(), DemoTranslator(),
+                            publisher, Metrics(), PipelineStatus(), log_dir=tmp / "logs")
+        return pipeline, cfg
+
+    def test_every_stage_is_counted(self) -> None:
+        with _tmpdir() as tmp:
+            pipeline, cfg = self._pipeline(tmp)
+            pipeline.run()
+            diag = pipeline.diag()
+            counters = diag["counters"]
+            from livesub import __version__
+
+            self.assertEqual(diag["version"], __version__)
+            self.assertGreater(counters["frames"], 0)
+            self.assertGreater(counters["speech_frames"], 0)
+            self.assertGreater(counters["utterances"], 0)
+            self.assertGreater(counters["asr_calls"], 0)
+            self.assertEqual(counters["asr_empty"], 0)
+            self.assertGreater(counters["emitted"], 0)
+            self.assertGreater(diag["speech_ratio"], 0)
+            self.assertIsNotNone(diag["last_frame_age_s"])
+            self.assertEqual(diag["clients"]["subtitle"], 0)
+
+            audio, rate = pipeline.recent_audio(2.0)
+            self.assertEqual(rate, cfg.audio.sample_rate)
+            self.assertGreater(len(audio), 0)
+            self.assertLessEqual(len(audio), 2 * rate)
+
+    def test_empty_recognition_is_visible(self) -> None:
+        """ASR が空文字を返すケースを"無音"と取り違えない（最重要の診断項目）。"""
+        from livesub.asr.base import AsrResult
+
+        class EmptyASR:
+            name = "empty"
+            is_demo = False
+
+            def transcribe(self, audio, sample_rate):  # noqa: ANN001
+                return AsrResult(text="")
+
+            def close(self) -> None:
+                pass
+
+        with _tmpdir() as tmp:
+            pipeline, _ = self._pipeline(tmp, asr=EmptyASR())
+            pipeline.run()
+            counters = pipeline.diag()["counters"]
+            self.assertGreater(counters["asr_calls"], 0)
+            self.assertEqual(counters["asr_empty"], counters["asr_calls"])
+            self.assertEqual(counters["emitted"], 0)
+
+
+class DiagVerdictTest(unittest.TestCase):
+    def _diag(self, **overrides):
+        base = {
+            "running": True,
+            "last_frame_age_s": 0.2,
+            "speech_ratio": 0.3,
+            "counters": {"frames": 100, "utterances": 3, "asr_calls": 3, "asr_empty": 0,
+                         "emitted": 3},
+            "clients": {"subtitle": 1, "levels": 1},
+        }
+        base.update(overrides)
+        return base
+
+    def test_verdict_follows_the_signal_chain(self) -> None:
+        from livesub.server import _diag_verdict
+
+        self.assertIn("音声が届いていません", _diag_verdict(self._diag(
+            last_frame_age_s=10)))
+        self.assertIn("VAD", _diag_verdict(self._diag(speech_ratio=0.0)))
+        self.assertIn("区切り", _diag_verdict(self._diag(
+            counters={"frames": 100, "utterances": 0, "asr_calls": 0, "asr_empty": 0, "emitted": 0})))
+        self.assertIn("チャンネル", _diag_verdict(self._diag(
+            counters={"frames": 100, "utterances": 3, "asr_calls": 3, "asr_empty": 3, "emitted": 0})))
+        self.assertIn("OBS", _diag_verdict(self._diag(clients={"subtitle": 0, "levels": 0})))
+        self.assertIn("正常", _diag_verdict(self._diag()))
+
+
 class PublisherLevelFilterTest(unittest.TestCase):
     def test_level_only_goes_to_subscribers(self) -> None:
         """字幕页不能被 10Hz 的电平消息塞满队列。"""
@@ -353,6 +538,14 @@ class OverlayAutoHideTest(unittest.TestCase):
         for needle in ("panel-audio", "panel-record", "audio_device", "audio_gain",
                        "audio_threshold", "meter-fill", "record_on", "open-record",
                        "認識しきい値", "保存フォルダを開く", "既定オフ"):
+            self.assertIn(needle, html)
+
+    def test_admin_has_diagnostics_and_channel_picker(self) -> None:
+        """0.5.1：字幕が出ないときにどこで止まったかを画面だけで切り分けられる。"""
+        html = (ROOT / "overlay" / "admin.html").read_text(encoding="utf-8")
+        for needle in ("panel-diag", "diag-test", "diag-bundle", "diag-list",
+                       "audio_channel", "channel-field", "meter-channels",
+                       "サポート用ファイルを保存", "入力チャンネル"):
             self.assertIn(needle, html)
 
 
