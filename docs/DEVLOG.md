@@ -734,7 +734,8 @@ SHA256 611249BB80B52084C45D618A8178B0C4EF7EF4555BE32B408283B9D855EEBD9D
 ```
 
 Release 标题/正文/checklist 见 `dist\RELEASE_FIELDS.md` 与 `dist\RELEASE_BODY.md`
-（源文件 [RELEASE-0.5.0.md](RELEASE-0.5.0.md)）。下一步是 push + GitHub Release；
+（源文件 [RELEASE-0.5.0.md](RELEASE-0.5.0.md)）。
+`main=164dbf6` 与 `v0.5.0` 已于 2026-10-22 推送到 origin；只剩 GitHub 网页上建 Release。
 之后回到 **ASR 侧热词** 与真人麦克风基线（见 HANDOFF）。
 
 

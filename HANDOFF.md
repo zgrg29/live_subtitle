@@ -160,8 +160,8 @@ zip `dist\LiveSub-0.5.0-win64.zip`（373,004,176 bytes / 355.7MB），SHA256
 `dist\RELEASE_BODY.md` / `dist\RELEASE_FIELDS.md` 已同步。验收记录见
 [docs/ACCEPTANCE-0.5.0.md](docs/ACCEPTANCE-0.5.0.md)。
 
-1. **发布 0.5.0**：`git push origin main` + `git push origin v0.5.0`，
-   然后建 release（附件 zip + `.sha256.txt`，标题/正文用 `dist\RELEASE_FIELDS.md`）；
+1. **建 0.5.0 的 GitHub Release**：`main=164dbf6` 与 `v0.5.0` 已推送（2026-10-22），
+   只剩网页上建 release（附件 zip + `.sha256.txt`，标题/正文用 `dist\RELEASE_FIELDS.md`）；
    0.3.x 的包是旧版，建议归档或删掉，只保留 0.4.0 / 0.5.0。
 2. **ASR 侧**（唯一没动过的层）：`のり弁当`、`唐揚げ` 先看 `ja` 原文；`ja` 就错就试
    `sherpa-onnx` 的 hotwords（要 `modified_beam_search`，先量延迟）。
