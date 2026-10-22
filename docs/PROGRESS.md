@@ -163,8 +163,8 @@ Release 标题 / 正文 / tag 见 `dist\RELEASE_FIELDS.md` 与 `dist\RELEASE_BOD
 
 ## 下一步
 
-1. **建 GitHub Release**：`main` 与 `v0.5.0` 已推送到 origin（2026-10-22，
-   `main=164dbf6`）。Release 用 `dist\RELEASE_FIELDS.md` 的标题/正文，附件用
+1. **建 GitHub Release**：`v0.5.0`（`164dbf6`）已推送到 origin（2026-10-22）。
+   Release 用 `dist\RELEASE_FIELDS.md` 的标题/正文，附件用
    `dist\LiveSub-0.5.0-win64.zip` 和 `.sha256.txt`。
 2. **用 `recordings/` 攒真实数据**：先让主播开记录跑几场，再用 `lines.jsonl` 的偏移切音频，
    做真人断句/翻译基线；这一步比继续猜词更重要。
