@@ -26,6 +26,9 @@ class EnergyVAD:
     def __init__(self, cfg: VADConfig) -> None:
         self.cfg = cfg
         self.last_rms = 0.0
+        # 实际生效的门限 = max(绝对门限, 噪声底 × noise_ratio)。
+        # 设置页的电平条要把它画出来，否则用户会疑惑「明明超过滑块了却不识别」。
+        self.effective_threshold = float(cfg.threshold)
         self.reset()
 
     def reset(self) -> None:
@@ -37,6 +40,7 @@ class EnergyVAD:
         rms = float(np.sqrt(np.mean(np.square(frame, dtype=np.float32))))
         self.last_rms = rms
         threshold = max(self.cfg.threshold, self._floor * self.cfg.noise_ratio)
+        self.effective_threshold = threshold
         speech = rms > threshold
         if not speech:
             # 只在非语音时更新噪声底，避免把说话声吸收进去

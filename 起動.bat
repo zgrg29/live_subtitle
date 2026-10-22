@@ -24,6 +24,7 @@ if not exist "models\sherpa-ja\tokens.txt" (
 
 echo.
 echo  LiveSub を起動しています。字幕ページ： http://127.0.0.1:8765/overlay
+echo  設定ページ（マイク・スタイル・記録）はブラウザで自動的に開きます。
 echo  このウィンドウを閉じると停止します。
 echo.
 

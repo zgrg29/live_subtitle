@@ -1,4 +1,4 @@
-﻿# 开发日志
+# 开发日志
 
 > 只记"发生了什么、为什么、数字是多少"。架构细节看 [ARCHITECTURE.md](ARCHITECTURE.md)，
 > 决策理由看 [DECISIONS.md](DECISIONS.md)，下一步看 [HANDOFF.md](HANDOFF.md)。
@@ -624,6 +624,118 @@ UI 全面日语化 + 词典扩容对用户是可见的功能变化，按语义�
 
 绿色版已重打（2026-10-21）：`dist\LiveSub-0.4.0`，zip 见 `dist\LiveSub-0.4.0-win64.zip`，
 SHA256 见同目录的 `.sha256.txt`。
+
+## 2026-10-22 · 主播反馈的 5 项 UX（0.5.0）
+
+### 反馈原话（转述）
+
+1. 说完一句以后如果沉默了，字幕会一直挂在屏幕上，希望过一会儿自动消失（多久合适？）；
+2. 设置里要能选麦克风（电脑上有多个）；
+3. 说话小声时识别不到，可能是阈值太高；希望能自己调音量/灵敏度，最好有 OBS 那种实时电平；
+4. 打开软件时就应该把设置页在浏览器里打开，不要让用户自己敲地址；
+5. 想要一个默认关闭的录音功能：录音频 + 识别到的日语 + 中文翻译，拿回来做持续改进。
+
+### 先想清楚「多久」
+
+字幕停留时间不是越短越好：停留太短，观众读到一半就没了；太长，沉默时屏幕一直挂着。
+定的是 **5 秒基准 + 按字数延长**：
+
+- 新句子出现时重置计时（连续说话时永远不会触发）；
+- 估算阅读速度约 6–8 字/秒，`max(5000, 1500 + 字数×130)`，上限 15 秒；
+- `0` 表示永不自动清屏，给「想一直留最后一句」的人；
+- `?preview=1` 预排版页不清屏，否则调字体时文字会自己消失。
+
+### 麦克风：同名设备是个坑
+
+设置页第一版只打算保存设备名，实测发现这台机器有 **3 个同名的
+`麦克风 (USBAudio1.0)`**，PortAudio 按名字取第一个，用户选第二个也会打开第一个。
+所以配置里同时保存 `device`（名字，兼容手写）和 `device_index`（精确选择）：
+
+- 切换时先关旧流再开新流（Windows 上很多麦克风是独占的，同时开会失败）；
+- 新设备打不开就用旧设备重建，**配置不落盘**，直播不中断；
+- 重启后索引变了（换 USB 口）就按名字找，`resolve_input_device` 里有回退。
+
+### 电平：为什么单独开 `/ws?levels=1`
+
+电平 10Hz。一开始和字幕共用 `/ws`，后来意识到 OBS 的 CEF 被挂起时，
+64 格队列 6 秒就会被电平塞满，真正要显示的字幕反而被丢掉。
+现在 `Publisher` 按客户端记录是否订阅 level，字幕页不接收。设置页的 meter 只是画条，
+不影响推理线程。
+
+门限在 UI 上用 dBFS 显示（默认 0.008 ≈ -42 dBFS），因为「-42 dB」比「0.008」可读。
+实际门限还会被噪声底抬高（`max(threshold, floor×noise_ratio)`），这点写进了设置页提示。
+
+### 记录：连续 WAV + offset，而不是每句一个文件
+
+只存每句话的 WAV 会丢掉句子之间的停顿，以后想复现分句/重跑 ASR 就没有上下文了。
+所以存一条连续 WAV，`lines.jsonl` 里每句只记 `audio` + `start_s`/`end_s`：
+既能直接听整段，也能按偏移切片。
+
+- 写盘在 `record.py` 的独立线程，pipeline 线程只做 int16 转换 + 入队；
+- `max_minutes` 默认 60，超过就分段（16k/16-bit 单声道约 115MB/小时）；
+- 默认 `record.enabled = false`；设置页开关即时生效，不重启；
+- 数据只在本机，不上传；`README.txt` 里写了「可能录到其他人声音，分享前确认同意」。
+
+### 验证
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -q   # 75 个，全绿
+.\.venv\Scripts\python.exe -m livesub run --synthetic 40 --mock --port 8799 --no-browser
+.\.venv\Scripts\python.exe tools\check_server.py --port 8799 --lines 1
+```
+
+- 真实麦克风模式实测热切换：`--mock` 打开默认 USB 麦 → 切到 index 5（同名麦）→
+  切到不存在/不可用的 index 13 → 报错并**自动回到旧设备**，pipeline 继续运行；
+- 录音开关实测：开 4 秒 → 2 句、4.1 秒 WAV、`lines.jsonl` 2 行；关闭后文件完整可读；
+- `/ws?levels=1` 收到 `level`，`/ws` 收不到；`PublisherLevelFilterTest` 用两个队列守住了这个约定。
+
+### 补充（同日）：自动打开设置页的时序修复
+
+用户反馈"启动后浏览器没有打开设置页"。代码本身会开，但原来的判断有漏洞：
+只做 TCP connect 就开浏览器。uvicorn 是**先绑定端口、再跑 lifespan**，这时候打开浏览器
+会看到「このサイトにアクセスできません」，而浏览器不会自己重试，用户就以为没打开。
+
+改成轮询 `/api/health`，拿到 200 才调浏览器；同时：
+
+- 控制台明确打印「設定ページをブラウザで開きました：URL」或失败原因；
+- Windows 下 `webbrowser.open` 返回 False 时再用 `os.startfile` 兜底；
+- 等待上限从 15s 提到 30s，首次加载模型较慢的机器也够；
+- 用 `BROWSER` 环境变量 + 一个只记录 URL 的 `.cmd` 做过端到端验证（不真的弹浏览器）。
+
+另一个常见原因：**跑的是旧版 exe**。`dist\LiveSub-0.4.0\LiveSub.exe` 里没有这个功能；
+新版是 `dist\LiveSub\LiveSub.exe`，启动横幅应显示 `LiveSub 0.5.0`。
+
+### 补充（同日）：词典两个表默认折叠
+
+主播反馈：词典页两个表（292 条固定表达 + 155 条术语）一打开就铺满，找东西很费劲；
+「＋ 追加」在表格最下面，加一条要先滚到底。改成原生 `<details>` 折叠卡片：
+
+- 两个表默认收起，标题右侧显示件数；点标题展开；
+- 展开后「＋ 追加」在表格上方，点完聚焦到新行第一个输入框；
+- 没有引入 JS 状态管理，也没有加“全部展开”按钮——两个表而已，点两下不麻烦。
+
+### 0.5.0 验收与打包
+
+2026-10-22 完成发布前验收，详见 [ACCEPTANCE-0.5.0.md](ACCEPTANCE-0.5.0.md)：
+
+- 单元测试 **75 个全绿**；
+- 源码版：health / overlay / admin / audio / record / WS level / check_server / selftest 全通过；
+- 绿色版：`--version` 0.5.0，health/admin/audio/record 全通过，录音 32,320 frames；
+- 自动开设置页：用 `BROWSER` 假浏览器收到 `http://127.0.0.1:8794/admin`，控制台打印成功；
+- 未覆盖：真人麦克风 CER、OBS 实机 10 分钟渲染。
+
+**发布产物**：
+
+```text
+dist\LiveSub-0.5.0\                       602 MB / 2,747 files
+dist\LiveSub-0.5.0-win64.zip              373,004,176 bytes (355.7 MB)
+dist\LiveSub-0.5.0-win64.zip.sha256.txt   91 bytes
+SHA256 611249BB80B52084C45D618A8178B0C4EF7EF4555BE32B408283B9D855EEBD9D
+```
+
+Release 标题/正文/checklist 见 `dist\RELEASE_FIELDS.md` 与 `dist\RELEASE_BODY.md`
+（源文件 [RELEASE-0.5.0.md](RELEASE-0.5.0.md)）。下一步是 push + GitHub Release；
+之后回到 **ASR 侧热词** 与真人麦克风基线（见 HANDOFF）。
 
 
 

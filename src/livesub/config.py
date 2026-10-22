@@ -63,6 +63,9 @@ def resolve_config_path(path: str | Path = CONFIG_FILENAME) -> Path:
 @dataclass
 class AudioConfig:
     device: str = ""  # 空 = 系统默认麦克风；也可填设备名的一部分，如 "Microphone"
+    # PortAudio 的设备索引。同名麦克风（两个同型号 USB 麦）只靠名字会选到第一个，
+    # 所以设置页会同时保存索引；重启后索引变了会退回按名字匹配。
+    device_index: int = -1
     sample_rate: int = 16000  # ASR 模型通常是 16k，最好不要改
     block_ms: int = 20  # 每次读取的音频块长度，20ms 是延迟/开销的平衡点
     gain: float = 1.0
@@ -141,6 +144,27 @@ class OverlayConfig:
     max_lines: int = 2  # 屏幕上最多保留几行，多了滚动消失
     line_gap: int = 10  # 行间距(px)
     fade_ms: int = 180  # 淡入时长
+    # 最后一句字幕显示多久后自动消失（毫秒）；0 = 一直留着。
+    # 5 秒是「一句话说完后还有足够时间读完」和「沉默时别一直挂在屏幕上」的折中；
+    # 前端还会按字数给长句自动延长一点（见 overlay/index.html）。
+    clear_after_ms: int = 5000
+
+
+@dataclass
+class UiConfig:
+    open_admin: bool = True  # 启动时自动用浏览器打开设置页
+
+
+@dataclass
+class RecordConfig:
+    """可选：把麦克风音频 + 识别/翻译结果存到本地，用来持续改进。
+
+    默认关闭。开启后数据只写本机，不发任何网络请求。
+    """
+
+    enabled: bool = False
+    dir: str = "recordings"  # 相对数据目录（源码根 / exe 所在目录）
+    max_minutes: int = 60  # 单个 WAV 文件最长多少分钟，超过就分段；0 = 不分段
 
 
 @dataclass
@@ -165,6 +189,8 @@ class Config:
     mt: MTConfig = None  # type: ignore[assignment]
     glossary: GlossaryConfig = None  # type: ignore[assignment]
     overlay: OverlayConfig = None  # type: ignore[assignment]
+    ui: UiConfig = None  # type: ignore[assignment]
+    record: RecordConfig = None  # type: ignore[assignment]
     server: ServerConfig = None  # type: ignore[assignment]
     debug: DebugConfig = None  # type: ignore[assignment]
 
@@ -182,6 +208,8 @@ _SECTIONS = {
     "mt": MTConfig,
     "glossary": GlossaryConfig,
     "overlay": OverlayConfig,
+    "ui": UiConfig,
+    "record": RecordConfig,
     "server": ServerConfig,
     "debug": DebugConfig,
 }
@@ -204,6 +232,18 @@ def _apply(obj: Any, data: dict[str, Any]) -> None:
 def asdict_overlay(cfg: Config) -> dict[str, Any]:
     """把 overlay 段转成可以 JSON 化的 dict（给设置面板用）。"""
     return {f.name: getattr(cfg.overlay, f.name) for f in fields(cfg.overlay)}
+
+
+def asdict_audio(cfg: Config) -> dict[str, Any]:
+    """麦克风设置（给设置面板用）。threshold 是 RMS，UI 会换算成 dB。"""
+    return {
+        "device": cfg.audio.device,
+        "device_index": cfg.audio.device_index,
+        "gain": cfg.audio.gain,
+        "threshold": cfg.vad.threshold,
+        "noise_ratio": cfg.vad.noise_ratio,
+        "sample_rate": cfg.audio.sample_rate,
+    }
 
 
 def apply_overlay(cfg: Config, values: dict[str, Any]) -> dict[str, Any]:
@@ -324,13 +364,16 @@ def _validate(cfg: Config) -> None:
     """逐项做类型转换和范围钳制。TOML 里写错类型不应该让程序起不来。"""
     a = cfg.audio
     a.device = str(a.device or "")
+    a.device_index = max(-1, _num(a.device_index, -1, int))
     a.sample_rate = max(8000, min(48000, _num(a.sample_rate, 16000, int)))
     a.block_ms = max(10, min(100, _num(a.block_ms, 20, int)))
     a.gain = max(0.1, min(8.0, _num(a.gain, 1.0, float)))
 
     v = cfg.vad
-    v.threshold = _num(v.threshold, 0.008, float)
-    v.noise_ratio = _num(v.noise_ratio, 2.5, float)
+    # 允许把门限降到 -66dBFS 左右（0.0005），够安静的小麦克风用；
+    # 上限 0.2（-14dBFS）避免误设成「几乎永远不说话」。
+    v.threshold = max(0.0005, min(0.2, _num(v.threshold, 0.008, float)))
+    v.noise_ratio = max(1.0, min(8.0, _num(v.noise_ratio, 2.5, float)))
     v.min_speech_ms = max(50, _num(v.min_speech_ms, 160, int))
     v.end_silence_ms = max(150, _num(v.end_silence_ms, 320, int))
     v.max_utterance_s = max(2.0, _num(v.max_utterance_s, 8.0, float))
@@ -373,7 +416,15 @@ def _validate(cfg: Config) -> None:
     o.margin_percent = max(0, min(45, _num(o.margin_percent, 8, int)))
     o.line_gap = max(0, _num(o.line_gap, 10, int))
     o.fade_ms = max(0, _num(o.fade_ms, 180, int))
+    o.clear_after_ms = max(0, min(60000, _num(o.clear_after_ms, 5000, int)))
     o.position = "top" if str(o.position).lower() == "top" else "bottom"
+
+    cfg.ui.open_admin = _bool(cfg.ui.open_admin, True)
+
+    r = cfg.record
+    r.enabled = _bool(r.enabled, False)
+    r.dir = str(r.dir if r.dir is not None else "recordings")
+    r.max_minutes = max(0, min(1440, _num(r.max_minutes, 60, int)))
 
     cfg.server.host = str(cfg.server.host or "127.0.0.1")
     cfg.server.port = max(1, min(65535, _num(cfg.server.port, 8765, int)))
@@ -411,9 +462,11 @@ def to_toml(cfg: Config) -> str:
 _COMMENTS: dict[str, dict[str, str]] = {
     "audio": {
         "device": "空欄＝システム既定のマイク。名前の一部を書けば一致するマイクを使います",
+        "device_index": "同じ名前のマイクが複数あるときの識別用。通常は設定ページから選べば自動で入ります",
         "gain": "入力ゲイン。マイクが小さいときは 1.5〜2.0 に上げます",
     },
     "vad": {
+        "threshold": "声とみなす最小音量（RMS）。小さい声を拾いたいときは小さくします（設定ページの「音声」タブからも変更可）",
         "end_silence_ms": "無音が何 ms 続いたら発話終了とみなすか。[segment] の統合があるので、区切りのために大きくする必要はありません",
         "min_speech_ms": "大きくするほど咳・マイク叩きなどの雑音を弾きます",
     },
@@ -439,6 +492,15 @@ _COMMENTS: dict[str, dict[str, str]] = {
         "bilingual": "日本語の原文も表示するか",
         "zh_size": "中国語字幕の文字サイズ(px)。OBS キャンバス 1920x1080 基準",
         "outline_width": "縁取りの幅(px)。0 で縁取りなし",
+        "clear_after_ms": "最後の字幕を表示してから自動で消すまでの時間(ms)。0 で消しません（長い文は自動で少し延長）",
+    },
+    "ui": {
+        "open_admin": "起動したときに設定ページをブラウザで自動的に開くか",
+    },
+    "record": {
+        "enabled": "改善用の記録。オンにするとマイク音声と認識/翻訳結果をこの PC に保存します（既定オフ・外部送信なし）",
+        "dir": "保存先フォルダ（データフォルダからの相対パス）",
+        "max_minutes": "1 ファイルの最大長（分）。超えたら audio-001.wav のように分割します。0 で分割なし",
     },
     "server": {"port": "OBS のブラウザソースに入力するポート"},
 }

@@ -50,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--wav", type=str, default="", help="マイクの代わりに WAV ファイルを使う（デバッグ用）")
     p_run.add_argument("--mock", action="store_true", help="デモモードを強制する（モデルを読み込まない）")
     p_run.add_argument("--normal-priority", action="store_true", help="プロセスの優先度を下げない")
+    p_run.add_argument("--no-browser", action="store_true",
+                       help="起動時に設定ページを自動で開かない")
 
     p_self = sub.add_parser("selftest", help="ハードウェアなしの自己テスト")
     p_self.add_argument("--seconds", type=float, default=8.0)
@@ -117,7 +119,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
     publisher = Publisher()
     metrics = Metrics()
     status = PipelineStatus()
-    pipeline = Pipeline(cfg, source, asr, mt, publisher, metrics, status)
+    # 只有真实麦克风才能在设置页里热切换；WAV/合成音源没有设备可换。
+    source_factory = None
+    if not args.wav and not args.synthetic:
+        source_factory = lambda device, index: build_source(  # noqa: E731
+            cfg, device=device, device_index=index
+        )
+    pipeline = Pipeline(cfg, source, asr, mt, publisher, metrics, status,
+                        source_factory=source_factory)
 
     app = create_app(
         Runtime(
@@ -127,10 +136,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
             metrics=metrics,
             status=status,
             overlay_dir=bundle_dir() / "overlay",
+            config_path=Path(args.config),
         )
     )
 
-    _print_banner(cfg, status)
+    _print_banner(cfg, status, open_browser=cfg.ui.open_admin and not args.no_browser)
     import uvicorn
 
     if not _port_available(cfg.server.host, cfg.server.port):
@@ -141,6 +151,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
             input("Enter キーで終了…")
         return 4
 
+    # 起動直後に設定ページを開く。サーバーが実際に応答し始めてから開かないと
+    # ブラウザに「接続できません」が出るので、ポートが開くまで裏で待つ。
+    if cfg.ui.open_admin and not args.no_browser:
+        _open_admin_when_ready(cfg.server.host, cfg.server.port)
+
     try:
         uvicorn.run(app, host=cfg.server.host, port=cfg.server.port, log_level="warning")
     except KeyboardInterrupt:
@@ -148,14 +163,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_banner(cfg: Config, status: PipelineStatus) -> None:
+def _print_banner(cfg: Config, status: PipelineStatus, open_browser: bool = False) -> None:
     base = f"http://{cfg.server.host}:{cfg.server.port}"
     line = "─" * 58
     print(f"\n{line}")
     print(f"  {APP_NAME} {__version__}")
     print(line)
     print(f"  字幕ページ　：{base}/overlay")
-    print(f"  設定ページ　：{base}/admin            ← フォント・色・背景・辞書")
+    print(f"  設定ページ　：{base}/admin            ← フォント・色・マイク・記録・辞書")
+    if open_browser:
+        print("  設定ページは起動後にブラウザで自動的に開きます（--no-browser で無効）")
+    elif cfg.ui.open_admin:
+        print("  設定ページの自動表示は --no-browser でオフになっています")
+    else:
+        print("  設定ページの自動表示は設定でオフです（[ui] open_admin）")
     print(f"  デバッグ　　：{base}/overlay?debug=1     （遅延と接続状態を表示）")
     print(f"  プレビュー　：{base}/overlay?preview=1   （配信なしでレイアウト確認）")
     print(f"  マイク　　　：{status.source}")
@@ -183,6 +204,76 @@ def _port_available(host: str, port: int) -> bool:
             return True
         except OSError:
             return False
+
+
+def _open_admin_when_ready(host: str, port: int, timeout: float = 30.0) -> None:
+    """等 HTTP 服务真正可用后，再用默认浏览器打开设置页。
+
+    不能只用 TCP connect 判断：uvicorn 监听端口时 lifespan 可能还没跑完，
+    这时候打开浏览器会看到「このサイトにアクセスできません」，而且浏览器不会自动重试。
+    这里改为轮询 `/api/health` 直到返回 200，最多等 `timeout` 秒。
+    """
+    import http.client
+    import threading
+    import time
+    import webbrowser
+
+    target = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    url = f"http://{target}:{port}/admin"
+
+    def wait_until_ready() -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                conn = http.client.HTTPConnection(target, port, timeout=1.0)
+                try:
+                    conn.request("GET", "/api/health")
+                    response = conn.getresponse()
+                    response.read(1024)
+                    if response.status == 200:
+                        return True
+                finally:
+                    conn.close()
+            except (OSError, http.client.HTTPException):
+                pass
+            time.sleep(0.25)
+        return False
+
+    def worker() -> None:
+        if not wait_until_ready():
+            print(
+                f"[起動] 設定ページを自動で開けませんでした（サーバーの応答待ちがタイムアウト）。"
+                f"ブラウザで {url} を開いてください。",
+                flush=True,
+            )
+            return
+        if _open_url(url):
+            print(f"[起動] 設定ページをブラウザで開きました：{url}", flush=True)
+        else:
+            print(
+                f"[起動] ブラウザを自動で開けませんでした。手動で {url} を開いてください。",
+                flush=True,
+            )
+
+    threading.Thread(target=worker, name="livesub-open-admin", daemon=True).start()
+
+
+def _open_url(url: str) -> bool:
+    """用默认浏览器打开 URL；Windows 下再兜底一次 ShellExecute。"""
+    try:
+        import webbrowser
+
+        if webbrowser.open(url, new=2):
+            return True
+    except Exception:
+        pass
+    if sys.platform == "win32":
+        try:
+            os.startfile(url)  # type: ignore[attr-defined]
+            return True
+        except OSError:
+            pass
+    return False
 
 
 def _set_below_normal_priority() -> None:

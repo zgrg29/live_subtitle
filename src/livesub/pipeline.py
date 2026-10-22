@@ -5,6 +5,13 @@
 
 ASR/MT 都是同步阻塞调用，所以整条推理放在一个独立线程里，
 既不阻塞 WebSocket 推送，也不会让事件循环卡住。
+
+设置页的热切换：
+    - 麦克风：`switch_device()` 在调用线程里打开新设备，再关掉旧的；pipeline 线程
+      发现 `_source` 变了就换过去。打开新设备失败会回到旧设备，所以不会因为点错
+      设备而把正在直播的字幕搞停。
+    - 增益/门限：直接改共享的 Config 对象，下一次回调/下一帧就生效。
+    - 记录：`set_recording()` 只做开关，音频写盘在 recorder 自己的线程里。
 """
 
 from __future__ import annotations
@@ -18,15 +25,18 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
+from . import __version__
 from .audio.capture import AudioSource
+from .audio.level import rms_to_db
 from .audio.vad import EnergyVAD, Segmenter, Utterance
 from .composer import ComposedLine, SubtitleComposer
 from .config import Config, data_dir
 from .metrics import Metrics, UtteranceTrace
+from .record import SessionRecorder, record_root
 
 
 @dataclass
@@ -36,6 +46,7 @@ class PipelineStatus:
     asr: str = ""
     mt: str = ""
     demo: bool = False
+    recording: bool = False
     started_at: float = 0.0
     last_error: str = ""
 
@@ -47,6 +58,7 @@ class PipelineStatus:
             "asr": self.asr,
             "mt": self.mt,
             "demo": self.demo,
+            "recording": self.recording,
             "uptime_s": uptime,
             "last_error": self.last_error,
         }
@@ -57,22 +69,24 @@ class Publisher:
 
     def __init__(self, history: int = 30) -> None:
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._clients: set[asyncio.Queue] = set()
+        # queue -> 是否接收 level 消息。字幕页不需要电平，而且 OBS 的 CEF
+        # 被挂起时 10Hz 的电平会把队列塞满，挤掉真正要显示的字幕。
+        self._clients: dict[asyncio.Queue, bool] = {}
         self._history: deque[dict] = deque(maxlen=history)
         self._lock = threading.Lock()
 
     def attach_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
 
-    def add_client(self) -> asyncio.Queue:
+    def add_client(self, allow_levels: bool = False) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=64)
         with self._lock:
-            self._clients.add(queue)
+            self._clients[queue] = allow_levels
         return queue
 
     def remove_client(self, queue: asyncio.Queue) -> None:
         with self._lock:
-            self._clients.discard(queue)
+            self._clients.pop(queue, None)
 
     def history(self) -> list[dict]:
         # 与 publish() 共用锁：否则 WS 握手时可能撞上 append，
@@ -93,9 +107,12 @@ class Publisher:
             pass
 
     def _fanout(self, message: dict) -> None:
+        is_level = message.get("type") == "level"
         with self._lock:
-            clients = list(self._clients)
-        for queue in clients:
+            clients = list(self._clients.items())
+        for queue, allow_levels in clients:
+            if is_level and not allow_levels:
+                continue
             try:
                 queue.put_nowait(message)
             except asyncio.QueueFull:
@@ -114,6 +131,7 @@ class Pipeline:
         metrics: Metrics,
         status: PipelineStatus,
         log_dir: str | Path = "logs",
+        source_factory: Callable[[str, int], AudioSource] | None = None,
     ) -> None:
         self._cfg = cfg
         self._source = source
@@ -122,15 +140,24 @@ class Pipeline:
         self._pub = publisher
         self._metrics = metrics
         self._status = status
+        self._source_factory = source_factory
+        self._last_device: tuple[str, int] = (cfg.audio.device, cfg.audio.device_index)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._segmenter: Segmenter | None = None
         self._composer: SubtitleComposer | None = None
 
+        self._source_lock = threading.Lock()
+        self._recorder_lock = threading.Lock()
+        self._recorder: SessionRecorder | None = None
+        self._current_session = 0
+        self._last_level_at = 0.0
+
         self._status.source = getattr(source, "name", "unknown")
         self._status.asr = getattr(asr, "name", "unknown")
         self._status.mt = getattr(mt, "name", "unknown")
         self._status.demo = bool(getattr(asr, "is_demo", False)) or "demo" in self._status.asr
+        self._status.recording = False
 
         self._log_dir = Path(log_dir)
         if not self._log_dir.is_absolute():
@@ -142,15 +169,15 @@ class Pipeline:
     # ---------- 生命周期 ----------
 
     def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
         self._thread = threading.Thread(target=self.run, name="livesub-pipeline", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
-        try:
-            self._source.close()
-        except Exception:
-            pass
+        self._source.close()
 
     def join(self, timeout: float | None = None) -> None:
         if self._thread is not None:
@@ -173,6 +200,103 @@ class Pipeline:
         reload_fn(load_glossary(self._cfg.glossary.dir))
         return True
 
+    def set_gain(self, gain: float) -> None:
+        """输入增益：MicSource 的回调每块都读 `self.gain`，改完立刻生效。"""
+        self._cfg.audio.gain = float(gain)
+        with self._source_lock:
+            source = self._source
+        if hasattr(source, "gain"):
+            try:
+                source.gain = float(gain)
+            except Exception:
+                pass
+
+    def set_threshold(self, threshold: float) -> None:
+        """VAD 门限：EnergyVAD 持有同一个 Config 对象，改完下一帧生效。"""
+        self._cfg.vad.threshold = float(threshold)
+
+    def switch_device(self, device: str, device_index: int = -1) -> str:
+        """热切换麦克风。返回实际打开的设备名；失败时抛异常并尽量恢复旧设备。
+
+        先关旧设备再开新设备：Windows 上很多麦克风是独占的，同时开两个会失败。
+        打开失败会立刻用旧设备重建，保证直播不中断（只是可能有几十毫秒的空隙）。
+        """
+        if self._source_factory is None:
+            raise RuntimeError("WAV／合成音声モードではマイクを切り替えられません")
+
+        with self._source_lock:
+            old = self._source
+            previous = self._last_device
+            try:
+                old.close()
+            except Exception:
+                pass
+            try:
+                new = self._source_factory(str(device or ""), int(device_index))
+            except Exception as exc:
+                # 回退：用旧设备重建，别把正在跑的 pipeline 留在「没有输入」的状态
+                try:
+                    restored = self._source_factory(*previous)
+                    self._source = restored
+                    self._status.source = getattr(restored, "name", "unknown")
+                except Exception:
+                    pass
+                raise RuntimeError(f"マイクを開けませんでした：{exc}") from exc
+
+            self._source = new
+            self._last_device = (str(device or ""), int(device_index))
+            self._status.source = getattr(new, "name", "unknown")
+            self._status.last_error = ""
+        self._publish_status()
+        return self._status.source
+
+    def recording_state(self) -> dict[str, Any]:
+        with self._recorder_lock:
+            rec = self._recorder
+        state: dict[str, Any] = {
+            "enabled": bool(self._cfg.record.enabled),
+            "active": rec is not None,
+            "dir": str(record_root(self._cfg)),
+            "max_minutes": self._cfg.record.max_minutes,
+        }
+        if rec is not None:
+            state.update(rec.stats())
+        return state
+
+    def set_recording(self, enabled: bool) -> dict[str, Any]:
+        """打开/关闭记录。打开时从当前音频位置开始，之前的音频不会补录。"""
+        enabled = bool(enabled)
+        if enabled and not self._status.running:
+            raise RuntimeError("字幕パイプラインが動作していないため記録を開始できません")
+        closing: SessionRecorder | None = None
+        with self._recorder_lock:
+            if enabled and self._recorder is None:
+                recorder = SessionRecorder(
+                    self._cfg,
+                    version=__version__,
+                    source_name=self._status.source,
+                    asr_name=self._status.asr,
+                    mt_name=self._status.mt,
+                    sample_rate=self._cfg.audio.sample_rate,
+                )
+                # 如果是在直播中途打开的，当前时间轴已经走了很远；
+                # 记录从这个位置开始，字幕偏移要减掉它。
+                position = self._segmenter.position_ms if self._segmenter is not None else 0.0
+                recorder.session_index = self._current_session
+                recorder.start_part(position)
+                self._recorder = recorder
+                self._status.recording = True
+            elif not enabled and self._recorder is not None:
+                closing = self._recorder
+                self._recorder = None
+                self._status.recording = False
+            self._cfg.record.enabled = enabled
+
+        if closing is not None:
+            closing.close()
+        self._publish_status()
+        return self.recording_state()
+
     # ---------- 主循环 ----------
 
     def run(self) -> None:
@@ -180,23 +304,88 @@ class Pipeline:
         self._status.started_at = time.perf_counter()
         self._publish_status()
 
-        composer: SubtitleComposer | None = None
-        try:
-            vad = EnergyVAD(self._cfg.vad)
-            seg = Segmenter(self._cfg.vad, self._source.sample_rate, self._cfg.audio.block_ms)
-            self._segmenter = seg
-            composer = SubtitleComposer(
-                cfg=self._cfg.segment,
-                vad_cfg=self._cfg.vad,
-                transcribe=self._transcribe,
-                emit=self._emit_line,
-            )
-            self._composer = composer
+        if self._cfg.record.enabled:
+            try:
+                self.set_recording(True)
+            except Exception as exc:
+                self._status.last_error = f"REC: {type(exc).__name__}: {exc}"
+                self._pub.publish({"type": "error", "message": self._status.last_error})
 
-            for frame in self._source.frames():
+        source = self._source
+        try:
+            while not self._stop.is_set():
+                try:
+                    self._run_session(source, self._current_session)
+                except Exception as exc:  # 采集层异常（拔麦、设备被占用）
+                    self._status.last_error = f"{type(exc).__name__}: {exc}"
+                    self._pub.publish({"type": "error", "message": self._status.last_error})
+                finally:
+                    try:
+                        source.close()
+                    except Exception:
+                        pass
+
                 if self._stop.is_set():
                     break
-                utterance = seg.feed(frame, vad.is_speech(frame))
+
+                # 设置页刚刚换了设备：switch_device() 已经建好新 source
+                if self._source is not source:
+                    source = self._source
+                    self._current_session += 1
+                    continue
+
+                # WAV / 合成音源没有「重连」的概念，播完就结束
+                if self._source_factory is None:
+                    break
+
+                # 麦克风出错（拔出/休眠/被独占）：每隔一会儿重试同一个设备
+                source = self._reconnect(source)
+                if source is None:
+                    break
+                self._current_session += 1
+        finally:
+            self._close_recorder()
+            self._metrics.dropped_segments = (
+                self._segmenter.dropped if self._segmenter is not None else 0
+            )
+            self._status.running = False
+            for engine in (self._source, self._asr, self._mt):
+                try:
+                    engine.close()
+                except Exception:
+                    pass
+            self._status.recording = False
+            self._publish_status()
+
+    def _run_session(self, source: AudioSource, session_index: int) -> None:
+        """跑一段音源，直到它结束/出错/被关闭。换设备时会重新进入这里。"""
+        with self._recorder_lock:
+            recorder = self._recorder
+            if recorder is not None and recorder.session_index != session_index:
+                recorder.session_index = session_index
+                recorder.start_part(0.0)
+
+        vad = EnergyVAD(self._cfg.vad)
+        seg = Segmenter(self._cfg.vad, source.sample_rate, self._cfg.audio.block_ms)
+        self._segmenter = seg
+        composer = SubtitleComposer(
+            cfg=self._cfg.segment,
+            vad_cfg=self._cfg.vad,
+            transcribe=self._transcribe,
+            emit=self._emit_line,
+        )
+        self._composer = composer
+
+        try:
+            for frame in source.frames():
+                if self._stop.is_set():
+                    break
+                speech = vad.is_speech(frame)
+                self._publish_level(vad, speech)
+                utterance = seg.feed(frame, speech)
+                recorder = self._recorder
+                if recorder is not None:
+                    recorder.write(frame)
                 onset = seg.take_started()
                 if onset is not None:
                     composer.on_speech_start(onset)
@@ -207,24 +396,35 @@ class Pipeline:
             tail = seg.flush()
             if tail is not None:
                 self._handle(tail)
-        except Exception as exc:  # 采集层异常（拔麦、设备被占用）
-            self._status.last_error = f"{type(exc).__name__}: {exc}"
-            self._pub.publish({"type": "error", "message": self._status.last_error})
         finally:
+            composer.flush()  # 别把暂缓的最后一句弄丢
+            self._sync_segment_stats()
+            self._metrics.dropped_segments = seg.dropped
+
+    def _reconnect(self, previous: AudioSource) -> AudioSource | None:
+        """麦克风断流后的重连；返回新 source，或 None 表示要退出。"""
+        while not self._stop.is_set():
+            if self._source is not previous:
+                return self._source  # 等待期间用户换了设备
+            self._stop.wait(1.5)
+            if self._stop.is_set():
+                return None
+            if self._source is not previous:
+                return self._source
             try:
-                if composer is not None:
-                    composer.flush()  # 别把暂缓的最后一句弄丢
-                    self._sync_segment_stats()
-            finally:
-                self._metrics.dropped_segments = seg.dropped if "seg" in locals() else 0
-                self._status.running = False
-                try:
-                    self._source.close()
-                    self._asr.close()
-                    self._mt.close()
-                except Exception:
-                    pass
-                self._publish_status()
+                source = self._source_factory(*self._last_device)  # type: ignore[misc]
+            except Exception as exc:
+                message = f"{type(exc).__name__}: {exc}"
+                if message != self._status.last_error:
+                    self._status.last_error = message
+                    self._pub.publish({"type": "error", "message": message})
+                continue
+            self._source = source
+            self._status.source = getattr(source, "name", "unknown")
+            self._status.last_error = ""
+            self._publish_status()
+            return source
+        return None
 
     # ---------- 单段处理 ----------
 
@@ -298,6 +498,30 @@ class Pipeline:
         self._pub.publish(message)
         self._write_log(message)
 
+        recorder = self._recorder
+        if recorder is not None:
+            try:
+                recorder.add_line(message, line.start_ms, line.end_ms)
+            except Exception as exc:
+                self._status.last_error = f"REC: {type(exc).__name__}: {exc}"
+
+    def _publish_level(self, vad: EnergyVAD, speech: bool) -> None:
+        """给设置页的电平条：最多 10 次/秒，别把 WebSocket 灌满。"""
+        now = time.perf_counter()
+        if now - self._last_level_at < 0.1:
+            return
+        self._last_level_at = now
+        rms = float(vad.last_rms)
+        self._pub.publish(
+            {
+                "type": "level",
+                "rms": round(rms, 6),
+                "db": round(rms_to_db(rms), 1),
+                "threshold_db": round(rms_to_db(vad.effective_threshold), 1),
+                "speech": bool(speech),
+            }
+        )
+
     def _sync_segment_stats(self) -> None:
         if self._composer is None:
             return
@@ -306,6 +530,18 @@ class Pipeline:
         self._metrics.dropped_fillers = stats["dropped_fillers"]
         self._metrics.held_segments = stats["held"]
         self._metrics.hold_timeouts = stats["hold_timeouts"]
+
+    # ---------- 记录 ----------
+
+    def _close_recorder(self) -> None:
+        with self._recorder_lock:
+            recorder = self._recorder
+            self._recorder = None
+        if recorder is not None:
+            try:
+                recorder.close()
+            except Exception:
+                pass
 
     # ---------- 落盘 ----------
 

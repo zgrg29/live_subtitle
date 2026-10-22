@@ -1,15 +1,28 @@
 # 交接说明（下次从这里继续）
 
-> 最后更新：2026-10-21 · 版本 **0.4.0**（L10N 日语化 + M2.6 词典扩容；底层仍是 M2.3 断句合并 + M2.2 术语表/补标点 + 图形设置页）
+> 最后更新：2026-10-22 · 版本 **0.5.0**（主播反馈的 5 项 UX：字幕自动清屏 / 麦克风选择 / 电平与门限 / 启动自动开设置页 / 可选记录）
+> · 上一版 0.4.0 是 L10N 日语化 + M2.6 词典扩容。
 
 ## 一句话状态
 
 **实时日语→中文字幕已经完整可用**：麦克风 → VAD 切句 → 日语识别 → 断句合并 → 中文翻译 → OBS 上屏。
-绿色版在 `dist\LiveSub-0.4.0\`（602MB，含两个模型），压缩包 `dist\LiveSub-0.4.0-win64.zip`。
+0.4.0 绿色版在 `dist\LiveSub-0.4.0\`（602MB，含两个模型）；**0.5.0 已重打、验收并打包**：
+`dist\LiveSub-0.5.0\`（602MB，含两个模型，`--version` 显示 0.5.0）+
+`dist\LiveSub-0.5.0-win64.zip`（约 356MB，SHA 见 `docs\PROGRESS.md`）。
 
-**0.4.0 的关键变化**：用户可见的文本全部日语化；词典扩到 **292 条固定表达 + 155 条术语**；
-README 重写为日语用户手册，开发进度/质量数据搬到 `docs/PROGRESS.md`。
-0.3.1 已有的图形设置页 `/admin`、译前补标点、译文清洗保持不变。
+**0.5.0 的关键变化**（都是用户/主播直接提的反馈）：
+
+1. **字幕自动清屏**：`overlay.clear_after_ms` 默认 5000ms；新句子重置计时，长句按字数自动延长（最多 15s），
+   预排版页 `?preview=1` 不清屏；
+2. **麦克风选择**：设置页「音声」tab；保存后热切换（`Pipeline.switch_device`），失败自动回退旧设备，不中断直播；
+   `audio.device_index` 解决同名麦克风（两个同型号 USB 麦）选不中的问题；
+3. **音量/门限可视调节**：输入增益 + 识别门限（dBFS）+ OBS 风格电平条；`level` 消息 10Hz，
+   只发给 `/ws?levels=1`（设置页），字幕页不受影响；
+4. **启动自动打开 `/admin`**：`ui.open_admin = true`，等 `/api/health` 返回 200 后再开
+   （只看 TCP 端口会在 uvicorn lifespan 完成前打开，浏览器显示连接失败）；失败会在控制台打印 URL；`--no-browser` 可关；
+5. **可选记录（默认关闭）**：`record.py` 连续 WAV + `lines.jsonl`（ja/zh/音频偏移）+ `meta.json`；
+   设置页「記録」tab 即时开关，`record.enabled = false` 为默认值，数据只在本地；
+6. **词典页折叠**：两个表默认收起（标题右侧显示件数），展开后「＋ 追加」在表格上方。
 
 面向用户的总览在 [README.md](README.md)（日语），进度/质量数据在
 [docs/PROGRESS.md](docs/PROGRESS.md)（中文）。
@@ -30,7 +43,7 @@ README 重写为日语用户手册，开发进度/质量数据搬到 `docs/PROGR
 ```powershell
 $env:PYTHONPATH=''   # 已装 .pth，不需要 PYTHONPATH
 
-# 1) 单元测试：28 个，全绿（含 BOM/坏配置/长句切分/合并/语气词的回归测试）
+# 1) 单元测试：75 个，全绿（含 BOM/坏配置/长句切分/合并/语气词/录音/自动清屏/自动开设置页的回归测试）
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 
 # 2) 识别基准：RTF ≈ 0.14（补段首静音后）、平均 CER 4.5%
@@ -132,6 +145,8 @@ Start-Process 'D:\live_subtitle\dist\LiveSub\LiveSub.exe' -ArgumentList '--port'
 | 敏感词 / SRT 导出 | 未实现（M3） |
 | 代码签名 | 未做；首次运行弹「未知发布者」 |
 | 单实例锁 | 未做；重复双击会因端口占用退出（已有友好提示） |
+| 记录数据的自动评测 | 数据格式已定（`recordings/*`），还没接进 `tools/eval_*`；先攒真实数据再写脚本 |
+| 0.5.0 绿色版 | ✅ `dist\LiveSub` 已重打并冒烟通过（`--synthetic`、`/admin`、`/api/audio`、录音开/关）；还没做 0.5.0 专用目录 + zip |
 
 ## 下一步（按顺序）
 
@@ -139,14 +154,15 @@ Start-Process 'D:\live_subtitle\dist\LiveSub\LiveSub.exe' -ArgumentList '--port'
 `起動.bat`、绿色版 `使い方.txt`、README、release notes 全部日语；开发文档保留中文。
 没有引入 i18n 切换层——产品只面向日本用户，单语比两套文案更好维护。
 
-**绿色版已重打**（2026-10-21）：`dist\LiveSub-0.4.0`（602MB，日语 UI），
-zip `dist\LiveSub-0.4.0-win64.zip`（373.0MB），SHA256
-`7C4D30D870F92BC8A9E605AC4BA08788661F2C6655152D7F87EB1FCB5A53B3A6`，
-`dist\RELEASE_BODY.md` 已同步为日语。剩下的是 push / 建 release。
+**0.5.0 绿色版已打包**（2026-10-22）：`dist\LiveSub-0.5.0`（602MB），
+zip `dist\LiveSub-0.5.0-win64.zip`（373,004,176 bytes / 355.7MB），SHA256
+`611249BB80B52084C45D618A8178B0C4EF7EF4555BE32B408283B9D855EEBD9D`；
+`dist\RELEASE_BODY.md` / `dist\RELEASE_FIELDS.md` 已同步。验收记录见
+[docs/ACCEPTANCE-0.5.0.md](docs/ACCEPTANCE-0.5.0.md)。
 
-1. **发布 0.4.0**：`git push origin main` + `git push origin v0.4.0`，
-   然后建 release（附件 `dist\LiveSub-0.4.0-win64.zip`，正文用 `dist\RELEASE_BODY.md`）；
-   0.3.0 / 0.3.1 的包是旧版，建议归档或删掉，只保留 0.4.0。
+1. **发布 0.5.0**：`git push origin main` + `git push origin v0.5.0`，
+   然后建 release（附件 zip + `.sha256.txt`，标题/正文用 `dist\RELEASE_FIELDS.md`）；
+   0.3.x 的包是旧版，建议归档或删掉，只保留 0.4.0 / 0.5.0。
 2. **ASR 侧**（唯一没动过的层）：`のり弁当`、`唐揚げ` 先看 `ja` 原文；`ja` 就错就试
    `sherpa-onnx` 的 hotwords（要 `modified_beam_search`，先量延迟）。
    **ASR 的 CER 是播音腔测的，真人主播会更差**，这块可能是下一个真金矿。
@@ -217,10 +233,13 @@ zip `dist\LiveSub-0.4.0-win64.zip`（373.0MB），SHA256
 | 译文清洗（标点/重复/引号） | `src/livesub/text/postprocess.py` |
 | 翻译质量评测 | `eval/mt_eval.jsonl` + `tools/eval_mt.py`（`--no-glossary` 跑裸模型） |
 | 上屏内容/时机 | `src/livesub/pipeline.py::_emit_line`（何时出由 `composer.py` 决定） |
-| 字幕样式 | `overlay/index.html` 的 CSS 变量 + `config.py::OverlayConfig` |
+| 字幕样式 / 静默清屏 | `overlay/index.html` 的 CSS 变量 + `scheduleClear/fadeOutAll` + `config.py::OverlayConfig` |
+| 麦克风选择 / 电平条 | `overlay/admin.html` 音声 tab + `server.py::/api/audio` + `pipeline.py::switch_device` |
+| 记录（默认关） | `src/livesub/record.py` + `pipeline.py::set_recording` + `server.py::/api/record` |
+| 启动自动开设置页 | `__main__.py::_open_admin_when_ready` + `config.py::UiConfig` |
 | 打包 | `tools/build_exe.py` |
 
-## 七个容易改错的约定
+## 容易改错的约定
 
 1. **延迟必须从 `Utterance.speech_end_ts` 起算**，不是 `end_ts`（后者多算了 320ms 静音等待）。
 2. **不要翻译 partial**，也不要用"先出快译、合并后覆盖"的写法：字幕反复改写比慢更糟（ADR-003）。
@@ -233,6 +252,14 @@ zip `dist\LiveSub-0.4.0-win64.zip`（373.0MB），SHA256
    `children.length` 当条件（曾把 OBS 的 CEF 崩掉 5 次）。
 7. **语气词/空识别不能直接 return**：如果正有暂缓的句子，要把音频并进去（`_absorb`），
    否则合并链会被一个「えーと」打断。
+8. **`level` 消息只发给 `/ws?levels=1`**：10Hz 的电平会塞满 OBS 的 64 格队列、挤掉字幕。
+   新增高频消息时，先想清楚哪些客户端需要它（`Publisher.add_client(allow_levels=...)`）。
+9. **同名麦克风必须用 `device_index`**：这台机器上就有 3 个 `麦克风 (USBAudio1.0)`，
+   只存名字永远选到第一个。索引失效（换 USB 口）时 `resolve_input_device` 会退回按名字匹配。
+10. **换设备先关旧再开新**：Windows 上麦克风常常独占，同时开两个会失败；
+   打开失败必须在 `switch_device` 里用旧设备重建，不能把 pipeline 留在「没有输入」的状态。
+11. **录音偏移是音频时间轴，不是墙钟**：`lines.jsonl` 的 `start_s`/`end_s` 相对当前
+   `audio-XXX.wav` 的 part 起点；设备切换会开新 part，偏移从 0 重新算。
 
 另外：**字幕页是热更新的**——改 `overlay/index.html` 后复制到
 `dist/LiveSub/_internal/overlay/index.html`，OBS 右键刷新即可；只有 Python 改动才要重打包。

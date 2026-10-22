@@ -43,12 +43,65 @@ def list_input_devices() -> list[tuple[int, str, int]]:
     return out
 
 
-def resolve_input_device(device: str) -> int | None:
-    """把配置里的设备名（可只写一部分）解析成 sounddevice 的设备索引。
+def list_input_devices_detailed() -> list[dict]:
+    """给设置页用的设备列表：索引、名称、通道数、是否系统默认输入。
 
+    设备名可能重复（同型号 USB 麦克风插两个），所以同时返回索引；
+    但配置里保存的是名字（PortAudio 的索引重启后会变）。
+    """
+    import sounddevice as sd
+
+    try:
+        default_input = sd.default.device[0]
+    except Exception:
+        default_input = -1
+    out: list[dict] = []
+    for idx, dev in enumerate(sd.query_devices()):
+        channels = int(dev["max_input_channels"])
+        if channels <= 0:
+            continue
+        out.append(
+            {
+                "index": idx,
+                "name": str(dev["name"]),
+                "channels": channels,
+                "default": idx == default_input,
+            }
+        )
+    return out
+
+
+def default_input_name() -> str:
+    """系统默认输入设备名；没有设备时返回空串。"""
+    import sounddevice as sd
+
+    try:
+        info = sd.query_devices(kind="input")
+    except Exception:
+        return ""
+    if int(info["max_input_channels"]) <= 0:
+        return ""
+    return str(info["name"])
+
+
+def resolve_input_device(device: str, device_index: int = -1) -> int | None:
+    """把配置里的设备解析成 sounddevice 的设备索引。
+
+    `device_index` 优先（同名麦克风靠它区分）；索引对应的设备已经不存在、
+    或者名字对不上（重启后设备顺序变了）时，退回按名字匹配，避免配置一改就崩。
     留空返回 None，表示交给 PortAudio 用系统默认设备。
     """
     import sounddevice as sd
+
+    if device_index is not None and device_index >= 0:
+        try:
+            info = sd.query_devices(device_index)
+            name = str(info["name"])
+            same_name = not device or device.strip().lower() in name.lower()
+            if int(info["max_input_channels"]) > 0 and same_name:
+                return int(device_index)
+        except Exception:
+            pass  # 索引失效：继续按名字找
 
     if not device or not device.strip():
         try:
@@ -80,6 +133,7 @@ class MicSource:
         sample_rate: int = 16000,
         block_ms: int = 20,
         gain: float = 1.0,
+        device_index: int = -1,
     ) -> None:
         try:
             import sounddevice as sd
@@ -90,12 +144,14 @@ class MicSource:
         self.sample_rate = sample_rate
         self.block_ms = block_ms
         self.gain = float(gain)
+        self.device = device  # 配置里的原始写法（空 = 系统默认），切换设备时用来回退
+        self.device_index = int(device_index)
         self._queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=400)
         self._stop = threading.Event()
         self._last_cb = time.monotonic()
         self.dropped_blocks = 0
 
-        device_index = resolve_input_device(device)
+        device_index = resolve_input_device(device, self.device_index)
         info = sd.query_devices(device_index, kind="input")
         self.name = str(info["name"])
 

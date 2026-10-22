@@ -61,6 +61,22 @@
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
   .card h2 { font-size: 14px; margin: 0 0 4px; }
   .card .hint { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+
+  /* 折りたたみカード（辞書の 2 セクション）。既定は閉じた状態。 */
+  .card.fold { padding: 0; }
+  .card.fold > summary { list-style: none; display: flex; align-items: center; gap: 10px;
+                         padding: 14px; cursor: pointer; user-select: none; border-radius: 12px; }
+  .card.fold > summary::-webkit-details-marker { display: none; }
+  .card.fold > summary::marker { content: ""; }
+  .card.fold > summary:hover { background: rgba(255, 255, 255, .03); }
+  .card.fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .card.fold[open] > summary { border-bottom: 1px solid var(--line); border-radius: 12px 12px 0 0; }
+  .fold-head h2 { margin: 0; }
+  .fold-chev { flex: none; color: var(--muted); font-size: 10px; transition: transform .15s ease; }
+  .card.fold[open] .fold-chev { transform: rotate(90deg); }
+  .fold-count { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .fold-body { padding: 14px; }
+  .fold-toolbar { margin-top: 0; margin-bottom: 10px; }
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 4px; text-align: left; vertical-align: middle; }
   th { font-size: 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); }
@@ -76,6 +92,51 @@
   .try-out { margin-top: 8px; font-size: 13px; color: var(--muted); min-height: 22px; }
   .try-out b { color: var(--fg); font-weight: 600; }
   .warn { color: var(--warn); font-size: 12px; }
+
+  /* 音声 / 記録 */
+  #panel-audio, #panel-record { width: 100%; }
+  .card.wide { max-width: 860px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 18px; }
+  button.small { padding: 5px 10px; font-size: 12px; }
+  #audio_device { flex: 1; min-width: 0; background: var(--input); color: var(--fg);
+                  border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font: inherit; }
+
+  .meter-box { margin-top: 16px; background: #0b1015; border: 1px solid var(--line);
+               border-radius: 10px; padding: 12px; }
+  .meter-head { display: flex; align-items: baseline; gap: 10px; font-size: 12px; color: var(--muted); }
+  .meter-head #level-db { margin-left: auto; color: var(--fg); font-variant-numeric: tabular-nums;
+                          font-family: ui-monospace, Consolas, monospace; }
+  .meter-head #level-state.speech { color: var(--ok); }
+  .meter { position: relative; height: 22px; margin-top: 8px; background: #05080b;
+           border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .meter-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+                background: linear-gradient(90deg, #2ea043 0%, #3fb950 55%, #d29922 78%, #f85149 96%);
+                transition: width 80ms linear; }
+  .meter-peak { position: absolute; top: 0; bottom: 0; width: 2px; left: 0;
+                background: #fff; opacity: 0; transition: left 120ms linear, opacity 400ms linear; }
+  .meter-threshold { position: absolute; top: -2px; bottom: -2px; width: 2px; left: 0;
+                     background: #4c8dff; box-shadow: 0 0 6px rgba(76, 141, 255, .9); }
+  .meter-scale { display: flex; justify-content: space-between; color: var(--muted);
+                 font-size: 10px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .meter-hint { margin: 8px 0 0; }
+
+  .switch { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;
+            padding: 10px 0 4px; font-size: 14px; }
+  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .switch-track { position: relative; width: 42px; height: 24px; flex: none; border-radius: 999px;
+                  background: #2a333d; border: 1px solid var(--line); transition: background 150ms; }
+  .switch-knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+                 background: #b9c6d4; transition: transform 150ms, background 150ms; }
+  .switch input:checked + .switch-track { background: var(--accent); border-color: var(--accent); }
+  .switch input:checked + .switch-track .switch-knob { transform: translateX(18px); background: #fff; }
+  .switch input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .record-info { display: grid; gap: 6px; margin: 12px 0 4px; padding: 12px;
+                 background: var(--input); border: 1px solid var(--line); border-radius: 8px;
+                 font-size: 13px; }
+  .record-info div { display: flex; gap: 12px; align-items: baseline; }
+  .record-info span { color: var(--muted); min-width: 52px; }
+  .record-info code { color: var(--fg); word-break: break-all; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -84,7 +145,9 @@
   <h1>LiveSub 設定</h1>
   <div class="tabs">
     <button id="tab-style" class="on" data-panel="panel-style">スタイル</button>
+    <button id="tab-audio" data-panel="panel-audio">音声</button>
     <button id="tab-glossary" data-panel="panel-glossary">辞書</button>
+    <button id="tab-record" data-panel="panel-record">記録</button>
   </div>
   <div class="spacer"></div>
   <span class="status" id="top-status"></span>
@@ -157,6 +220,10 @@
         <div class="row"><input type="range" id="max_lines" min="1" max="6" step="1"><output id="max_lines_o"></output></div>
       </div>
       <div class="field">
+        <label>無音のとき字幕を消すまでの時間（0＝消さない）</label>
+        <div class="row"><input type="range" id="clear_after_ms" min="0" max="30" step="1"><output id="clear_after_ms_o"></output></div>
+      </div>
+      <div class="field">
         <label>日本語の原文を表示する</label>
         <div class="check"><input type="checkbox" id="bilingual"><span>日本語を表示</span></div>
       </div>
@@ -171,36 +238,145 @@
     </div>
   </section>
 
+  <!-- ================= 音声 ================= -->
+  <section id="panel-audio" class="hidden">
+    <div class="card wide">
+      <h2>マイク</h2>
+      <p class="hint">
+        パソコンに複数のマイクがある場合、ここで選べます。保存すると再起動なしで切り替わります。<br>
+        小さい声が拾われないときは <b>入力ゲイン</b> を上げるか、<b>認識しきい値</b> を下げてください。
+      </p>
+
+      <div class="grid2">
+        <div class="field" style="grid-column: 1 / -1">
+          <label>入力デバイス</label>
+          <div class="row">
+            <select id="audio_device"></select>
+            <button class="ghost small" id="refresh-audio">再読込</button>
+          </div>
+          <span class="status" id="audio-source"></span>
+        </div>
+
+        <div class="field">
+          <label>入力ゲイン（マイクが小さいときは上げる）</label>
+          <div class="row">
+            <input type="range" id="audio_gain" min="0.5" max="8" step="0.1">
+            <output id="audio_gain_o"></output>
+          </div>
+        </div>
+        <div class="field">
+          <label>認識しきい値（この線を超えた音を「声」とみなす）</label>
+          <div class="row">
+            <input type="range" id="audio_threshold" min="-66" max="-14" step="1">
+            <output id="audio_threshold_o"></output>
+          </div>
+        </div>
+      </div>
+
+      <div class="meter-box">
+        <div class="meter-head">
+          <span>入力レベル</span>
+          <span id="level-db">-∞ dB</span>
+          <span id="level-state" class="status">待機中</span>
+        </div>
+        <div class="meter">
+          <div class="meter-fill" id="meter-fill"></div>
+          <div class="meter-peak" id="meter-peak"></div>
+          <div class="meter-threshold" id="meter-threshold"></div>
+        </div>
+        <div class="meter-scale">
+          <span>-66</span><span>-48</span><span>-30</span><span>-12</span><span>0 dB</span>
+        </div>
+        <p class="hint meter-hint">
+          青い線が「認識しきい値」です。声を出したときのレベルがこの線を超えるように調整してください。
+          周囲のノイズが大きいときは、誤認識を避けるため実際のしきい値が自動で少し上がります。
+        </p>
+      </div>
+
+      <div class="actions">
+        <button class="primary" id="save-audio" disabled>保存して適用</button>
+        <button class="ghost" id="reload-audio">再読み込み</button>
+        <span class="status" id="audio-status"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 記録 ================= -->
+  <section id="panel-record" class="hidden">
+    <div class="card wide">
+      <h2>記録（改善用・既定オフ）</h2>
+      <p class="hint">
+        LiveSub の認識・翻訳を改善するために、マイク音声と字幕（日本語・中国語）をこの PC に保存します。
+        <b>外部には送信しません。</b> ふだんはオフのままで大丈夫です。
+      </p>
+
+      <label class="switch">
+        <input type="checkbox" id="record_on" disabled>
+        <span class="switch-track"><span class="switch-knob"></span></span>
+        <span>マイク音声と認識／翻訳結果を保存する</span>
+      </label>
+
+      <div class="record-info">
+        <div><span>状態</span><b id="record-state">停止中</b></div>
+        <div><span>保存先</span><code id="record-dir">-</code></div>
+        <div><span>今回</span><b id="record-stats">-</b></div>
+      </div>
+
+      <div class="actions">
+        <button class="ghost" id="open-record">保存フォルダを開く</button>
+        <span class="status" id="record-status"></span>
+      </div>
+
+      <p class="warn">
+        録音には、通話や来客など配信者本人以外の声も入る可能性があります。
+        データを共有する前に、写っている人全員の同意を確認してください。
+        削除するときは保存先フォルダをまるごと消してください。
+      </p>
+    </div>
+  </section>
+
   <!-- ================= 辞書 ================= -->
   <section id="panel-glossary" class="hidden">
-    <div class="card">
-      <h2>定型フレーズ（文全体）</h2>
-      <p class="hint">文全体が完全一致したときだけ有効です（句読点・空白・語尾の伸ばしは無視）。挨拶や配信の決まり文句に向いています。</p>
-      <table>
-        <thead><tr><th style="width:34%">日本語</th><th style="width:30%">中国語</th><th>メモ</th><th></th></tr></thead>
-        <tbody id="phrases-body"></tbody>
-      </table>
-      <div class="toolbar">
-        <button class="ghost" id="add-phrase">＋ 追加</button>
-        <span class="status" id="phrase-count"></span>
+    <details class="card fold" id="fold-phrases">
+      <summary class="fold-head" title="クリックで開閉">
+        <span class="fold-chev" aria-hidden="true">▶</span>
+        <h2>定型フレーズ（文全体）</h2>
+        <span class="fold-count" id="phrase-count"></span>
+      </summary>
+      <div class="fold-body">
+        <div class="toolbar fold-toolbar">
+          <button class="ghost" id="add-phrase">＋ 追加</button>
+          <span class="status">新しい行を先頭に追加します</span>
+        </div>
+        <p class="hint">文全体が完全一致したときだけ有効です（句読点・空白・語尾の伸ばしは無視）。挨拶や配信の決まり文句に向いています。</p>
+        <table>
+          <thead><tr><th style="width:34%">日本語</th><th style="width:30%">中国語</th><th>メモ</th><th></th></tr></thead>
+          <tbody id="phrases-body"></tbody>
+        </table>
       </div>
-    </div>
+    </details>
 
-    <div class="card">
-      <h2>用語</h2>
-      <p class="hint">
-        <b>pre</b>：翻訳前に日本語の語を中国語へ置き換えてからモデルに渡します（カタカナの固有名詞・ゲーム名・食べ物）。<br>
-        <b>post</b>：通常どおり翻訳し、訳文の「誤訳パターン」を正しい語に置換します（原文にその語があるときだけ有効）。複数指定は <code>|</code> 区切り。
-      </p>
-      <table>
-        <thead><tr><th style="width:26%">日本語</th><th style="width:22%">中国語</th><th style="width:11%">モード</th><th style="width:22%">誤訳パターン</th><th>メモ</th><th></th></tr></thead>
-        <tbody id="terms-body"></tbody>
-      </table>
-      <div class="toolbar">
-        <button class="ghost" id="add-term">＋ 追加</button>
-        <span class="status" id="term-count"></span>
+    <details class="card fold" id="fold-terms">
+      <summary class="fold-head" title="クリックで開閉">
+        <span class="fold-chev" aria-hidden="true">▶</span>
+        <h2>用語</h2>
+        <span class="fold-count" id="term-count"></span>
+      </summary>
+      <div class="fold-body">
+        <div class="toolbar fold-toolbar">
+          <button class="ghost" id="add-term">＋ 追加</button>
+          <span class="status">新しい行を先頭に追加します</span>
+        </div>
+        <p class="hint">
+          <b>pre</b>：翻訳前に日本語の語を中国語へ置き換えてからモデルに渡します（カタカナの固有名詞・ゲーム名・食べ物）。<br>
+          <b>post</b>：通常どおり翻訳し、訳文の「誤訳パターン」を正しい語に置換します（原文にその語があるときだけ有効）。複数指定は <code>|</code> 区切り。
+        </p>
+        <table>
+          <thead><tr><th style="width:26%">日本語</th><th style="width:22%">中国語</th><th style="width:11%">モード</th><th style="width:22%">誤訳パターン</th><th>メモ</th><th></th></tr></thead>
+          <tbody id="terms-body"></tbody>
+        </table>
       </div>
-    </div>
+    </details>
 
     <div class="card">
       <h2>試し翻訳</h2>
@@ -226,7 +402,11 @@
   "use strict";
 
   const $ = (id) => document.getElementById(id);
-  const state = { cfg: null, phrases: [], terms: [] };
+  const state = {
+    cfg: null, phrases: [], terms: [],
+    audio: null, devices: [], record: null,
+    levelDb: -90, peakDb: -90, peakAt: 0, levelAt: 0, recordBusy: false,
+  };
 
   async function api(url, opts) {
     const res = await fetch(url, opts);
@@ -242,12 +422,14 @@
   }
 
   /* ---------------- タブ ---------------- */
+  const PANELS = ["panel-style", "panel-audio", "panel-glossary", "panel-record"];
   document.querySelectorAll(".tabs button").forEach((btn) => {
     btn.onclick = () => {
       document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b === btn));
-      $("panel-style").classList.toggle("hidden", btn.dataset.panel !== "panel-style");
-      $("panel-glossary").classList.toggle("hidden", btn.dataset.panel !== "panel-glossary");
+      PANELS.forEach((id) => $(id).classList.toggle("hidden", id !== btn.dataset.panel));
       if (btn.dataset.panel === "panel-glossary" && !state.phrases.length) loadGlossary();
+      if (btn.dataset.panel === "panel-audio") loadAudio();
+      if (btn.dataset.panel === "panel-record") loadRecord();
     };
   });
 
@@ -293,6 +475,7 @@
     cfg.position = $("position").value;
     cfg.margin_percent = +$("margin_percent").value;
     cfg.max_lines = +$("max_lines").value;
+    cfg.clear_after_ms = +$("clear_after_ms").value * 1000;
     cfg.bilingual = $("bilingual").checked;
     return cfg;
   }
@@ -314,6 +497,9 @@
     $("position").value = cfg.position || "bottom";
     $("margin_percent").value = cfg.margin_percent; $("margin_percent_o").textContent = cfg.margin_percent + "%";
     $("max_lines").value = cfg.max_lines; $("max_lines_o").textContent = cfg.max_lines;
+    const clearSec = Math.max(0, Math.round((cfg.clear_after_ms ?? 5000) / 1000));
+    $("clear_after_ms").value = clearSec;
+    $("clear_after_ms_o").textContent = clearSec ? clearSec + "秒" : "消さない";
     $("bilingual").checked = !!cfg.bilingual;
   }
 
@@ -336,6 +522,8 @@
         if (out) out.textContent = $(k).value + (k === "margin_percent" ? "%" : k === "max_lines" ? "" : "px");
       });
       $("bg_alpha_o").textContent = $("bg_alpha").value + "%";
+      $("clear_after_ms_o").textContent = +$("clear_after_ms").value
+        ? $("clear_after_ms").value + "秒" : "消さない";
       pushPreview();
     });
   });
@@ -518,10 +706,264 @@
     return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
+  /* ---------------- 音声（マイク・レベル） ---------------- */
+
+  const DB_FLOOR = -66;
+
+  function dbPct(db) {
+    return Math.max(0, Math.min(100, ((db - DB_FLOOR) / -DB_FLOOR) * 100));
+  }
+
+  function refreshAudioOutputs() {
+    $("audio_gain_o").textContent = (+$("audio_gain").value).toFixed(1) + "×";
+    $("audio_threshold_o").textContent = Math.round(+$("audio_threshold").value) + " dB";
+    $("meter-threshold").style.left = dbPct(+$("audio_threshold").value) + "%";
+  }
+
+  function renderDevices(data) {
+    const sel = $("audio_device");
+    const cfg = data.config || {};
+    sel.innerHTML = "";
+    sel.add(new Option(
+      data.default_device ? "システム既定（" + data.default_device + "）" : "システム既定",
+      ""
+    ));
+    (data.devices || []).forEach((d) => {
+      const label = d.name
+        + (d.channels > 1 ? "（" + d.channels + "ch）" : "")
+        + (d.default ? " ← システム既定" : "");
+      const opt = new Option(label, String(d.index));
+      // 同名のマイクが複数あるので、値はインデックス。名前は再起動時のフォールバック用。
+      opt.dataset.name = d.name;
+      sel.add(opt);
+    });
+
+    // 1) 保存済みのインデックスが今の一覧にあって名前も一致 → それ
+    // 2) 無ければ名前で探す（別の USB ポートに挿し直して番号が変わった場合）
+    // 3) それでも無ければ「現在の設定」として残す
+    const options = Array.from(sel.options);
+    const index = Number.isInteger(cfg.device_index) ? cfg.device_index : -1;
+    let chosen = options.find((o) =>
+      o.value === String(index) && (!cfg.device || o.dataset.name === cfg.device));
+    if (!chosen && cfg.device) {
+      chosen = options.find((o) => o.dataset.name === cfg.device);
+    }
+    if (!chosen && cfg.device) {
+      const opt = new Option(cfg.device + "（現在の設定）", "current");
+      opt.dataset.name = cfg.device;
+      sel.add(opt);
+      chosen = opt;
+    }
+    sel.value = chosen ? chosen.value : "";
+  }
+
+  function applyAudioConfig(data) {
+    state.audio = data.config || {};
+    $("audio_gain").value = String(state.audio.gain ?? 1);
+    $("audio_threshold").value = String(Math.round(data.threshold_db ?? -42));
+    refreshAudioOutputs();
+    let text = "動作中のデバイス：" + (data.source || "-");
+    if (data.error) text += "　（デバイス一覧を取得できませんでした）";
+    $("audio-source").textContent = text;
+    $("save-audio").disabled = false;
+  }
+
+  async function loadAudio() {
+    try {
+      const data = await api("/api/audio");
+      renderDevices(data);
+      applyAudioConfig(data);
+      setStatus($("audio-status"), "");
+    } catch (e) {
+      setStatus($("audio-status"), "音声設定の読み込みに失敗しました：" + e.message, false);
+    }
+  }
+
+  $("refresh-audio").onclick = () => loadAudio();
+  $("reload-audio").onclick = () => loadAudio();
+  $("audio_gain").addEventListener("input", refreshAudioOutputs);
+  $("audio_threshold").addEventListener("input", refreshAudioOutputs);
+
+  $("save-audio").onclick = async () => {
+    const btn = $("save-audio");
+    btn.disabled = true;
+    try {
+      const selected = $("audio_device").selectedOptions[0];
+      const picked = selected ? +selected.value : NaN;
+      const deviceIndex = Number.isFinite(picked) ? picked : -1;
+      const res = await api("/api/audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device: selected ? (selected.dataset.name || "") : "",
+          device_index: deviceIndex,
+          gain: +$("audio_gain").value,
+          threshold_db: +$("audio_threshold").value,
+        }),
+      });
+      await loadAudio();
+      setStatus($("audio-status"), "保存しました。動作中：" + (res.source || "-"), true);
+    } catch (e) {
+      setStatus($("audio-status"), "保存に失敗しました：" + e.message, false);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  // WebSocket の level メッセージ（10 回/秒）でレベルメーターを動かす。
+  // 字幕ページと同じ /ws を使う。type が level 以外のメッセージは無視。
+  function updateMeter(msg) {
+    const db = Math.max(-90, Math.min(0, Number(msg.db)));
+    if (!isFinite(db)) return;
+    const now = performance.now();
+    state.levelAt = now;
+    if (db >= state.peakDb || now - state.peakAt > 1000) {
+      state.peakDb = db;
+      state.peakAt = now;
+    }
+    $("meter-fill").style.width = dbPct(db) + "%";
+    $("meter-peak").style.left = dbPct(state.peakDb) + "%";
+    $("meter-peak").style.opacity = "0.75";
+    $("level-db").textContent = (db <= -89 ? "-∞" : Math.round(db)) + " dB";
+    const st = $("level-state");
+    if (msg.speech) {
+      st.textContent = "発話を検出";
+      st.className = "status speech";
+    } else {
+      st.textContent = "待機中";
+      st.className = "status";
+    }
+  }
+
+  setInterval(() => {
+    if (performance.now() - state.levelAt < 2500) return;
+    $("meter-fill").style.width = "0%";
+    $("meter-peak").style.opacity = "0";
+    $("level-db").textContent = "-∞ dB";
+    $("level-state").textContent = "待機中";
+    $("level-state").className = "status";
+  }, 500);
+
+  let meterSocket = null;
+  let meterRetry = 0;
+  function connectMeter() {
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    try {
+      meterSocket = new WebSocket(scheme + "://" + location.host + "/ws?levels=1");
+    } catch (e) {
+      return;
+    }
+    meterSocket.onopen = () => { meterRetry = 0; };
+    meterSocket.onmessage = (event) => {
+      let msg;
+      try { msg = JSON.parse(event.data); } catch (e) { return; }
+      if (msg.type === "level") {
+        updateMeter(msg);
+      } else if (msg.type === "status" && msg.source) {
+        $("audio-source").textContent = "動作中のデバイス：" + msg.source;
+      }
+    };
+    meterSocket.onclose = () => {
+      meterRetry = Math.min(meterRetry + 1, 6);
+      setTimeout(connectMeter, 500 * meterRetry);
+    };
+    meterSocket.onerror = () => { try { meterSocket.close(); } catch (e) {} };
+  }
+
+  /* ---------------- 記録 ---------------- */
+
+  function formatBytes(bytes) {
+    const n = Number(bytes) || 0;
+    if (n < 1024) return n + " B";
+    if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
+    return (n / 1073741824).toFixed(2) + " GB";
+  }
+
+  function fillRecord(data) {
+    state.record = data;
+    const st = data.state || {};
+    $("record_on").checked = !!st.active;
+    if (!state.recordBusy) $("record_on").disabled = false;
+    $("record-state").textContent = st.active ? "記録中" : "停止中";
+    $("record-state").style.color = st.active ? "var(--ok)" : "";
+    $("record-dir").textContent = st.dir || (data.config && data.config.dir) || "-";
+    if (st.active) {
+      const parts = st.parts || 0;
+      const lines = st.lines || 0;
+      const dur = Math.round(st.duration_s || 0);
+      $("record-stats").textContent =
+        parts + " ファイル / " + lines + " 文 / " + dur + " 秒 / " + formatBytes(st.bytes);
+    } else {
+      $("record-stats").textContent = "-";
+    }
+    if (st.last_error) {
+      setStatus($("record-status"), "書き込みエラー：" + st.last_error, false);
+    }
+  }
+
+  async function loadRecord() {
+    try {
+      const data = await api("/api/record");
+      fillRecord(data);
+      setStatus($("record-status"), "");
+    } catch (e) {
+      setStatus($("record-status"), "記録設定の読み込みに失敗しました：" + e.message, false);
+    }
+  }
+
+  $("record_on").onchange = async () => {
+    if (state.recordBusy) return;
+    const want = $("record_on").checked;
+    state.recordBusy = true;
+    $("record_on").disabled = true;
+    setStatus($("record-status"), want ? "記録を開始しています…" : "記録を停止しています…");
+    try {
+      await api("/api/record", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: want }),
+      });
+      await loadRecord();
+      setStatus($("record-status"), want ? "記録を開始しました" : "記録を停止しました", true);
+    } catch (e) {
+      $("record_on").checked = !want;
+      setStatus($("record-status"), "変更に失敗しました：" + e.message, false);
+    } finally {
+      state.recordBusy = false;
+      $("record_on").disabled = false;
+    }
+  };
+
+  $("open-record").onclick = async () => {
+    try {
+      const res = await api("/api/record/open", { method: "POST" });
+      setStatus($("record-status"), "開きました：" + res.path, true);
+    } catch (e) {
+      setStatus($("record-status"), "フォルダを開けませんでした：" + e.message, false);
+    }
+  };
+
+  // 記録中はファイル数・文数・サイズを 2 秒ごとに更新
+  setInterval(async () => {
+    if ($("panel-record").classList.contains("hidden")) return;
+    const st = state.record && state.record.state;
+    if (!st || !st.active) return;
+    try { fillRecord(await api("/api/record")); } catch (e) {}
+  }, 2000);
+
   /* ---------------- 起動 ---------------- */
   $("pv").addEventListener("load", () => { fitPreview(); pushPreview(); });
   fitPreview();
   loadConfig();
+  connectMeter();
+
+  // URL でタブを直接開ける：/admin?tab=audio / ?tab=record / ?tab=glossary
+  const initialTab = new URLSearchParams(location.search).get("tab");
+  if (initialTab) {
+    const btn = document.querySelector('.tabs button[data-panel="panel-' + initialTab + '"]');
+    if (btn) btn.click();
+  }
 })();
 </script>
 </body>

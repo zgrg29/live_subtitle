@@ -18,10 +18,31 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from . import APP_NAME, __version__
-from .config import CONFIG_FILENAME, Config, apply_overlay, asdict_overlay, save_section
+from .audio.capture import default_input_name, list_input_devices_detailed
+from .audio.level import db_to_rms, rms_to_db
+from .config import (
+    CONFIG_FILENAME,
+    Config,
+    apply_overlay,
+    asdict_audio,
+    asdict_overlay,
+    save_section,
+)
 from .metrics import Metrics
 from .pipeline import Pipeline, PipelineStatus, Publisher
+from .record import open_dir
 from .text.glossary import load_glossary, save_glossary
+
+
+def _clamp(value, low: float, high: float, default: float) -> float:
+    """面板传来的数字不可信：转不动就用默认值，越界就夹住。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number != number:  # NaN
+        return default
+    return max(low, min(high, number))
 
 
 @dataclass
@@ -95,6 +116,137 @@ def create_app(runtime: Runtime) -> FastAPI:
         runtime.publisher.publish({"type": "config", "config": values})
         return {"ok": True, "config": values}
 
+    # ---------------- マイク設定 ----------------
+
+    @app.get("/api/audio")
+    async def api_audio() -> dict:
+        """麦克风列表 + 当前增益/门限。设备枚举失败也要把配置页撑起来。"""
+        try:
+            devices = await run_in_threadpool(list_input_devices_detailed)
+            default_name = await run_in_threadpool(default_input_name)
+            error = ""
+        except Exception as exc:
+            devices = []
+            default_name = ""
+            error = f"{type(exc).__name__}: {exc}"
+        cfg = runtime.cfg
+        return {
+            "ok": True,
+            "config": asdict_audio(cfg),
+            "threshold_db": round(rms_to_db(cfg.vad.threshold), 1),
+            "devices": devices,
+            "default_device": default_name,
+            "source": runtime.status.source,
+            "error": error,
+        }
+
+    @app.post("/api/audio")
+    async def api_save_audio(payload: dict) -> dict:
+        """保存并立即应用麦克风 / 增益 / 门限，不需要重启。"""
+        cfg = runtime.cfg
+        has_device = "device" in payload or "device_index" in payload
+        device = str(payload.get("device") or "") if has_device else cfg.audio.device
+        try:
+            device_index = int(payload.get("device_index", -1)) if has_device else cfg.audio.device_index
+        except (TypeError, ValueError):
+            device_index = -1
+        device_index = max(-1, device_index)
+
+        if has_device and (device, device_index) != (cfg.audio.device, cfg.audio.device_index):
+            try:
+                await run_in_threadpool(
+                    runtime.pipeline.switch_device, device, device_index
+                )
+            except Exception as exc:
+                # 打不开就保留旧设备（switch_device 内部已经回退），配置也不落盘
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            cfg.audio.device = device
+            cfg.audio.device_index = device_index
+
+        if "gain" in payload:
+            gain = _clamp(payload.get("gain"), 0.1, 8.0, cfg.audio.gain)
+            runtime.pipeline.set_gain(gain)
+        if "threshold_db" in payload:
+            threshold_db = _clamp(payload.get("threshold_db"), -66.0, -14.0,
+                                  rms_to_db(cfg.vad.threshold))
+            runtime.pipeline.set_threshold(db_to_rms(threshold_db))
+
+        try:
+            save_section(
+                runtime.config_path or CONFIG_FILENAME,
+                "audio",
+                {
+                    "device": cfg.audio.device,
+                    "device_index": cfg.audio.device_index,
+                    "gain": cfg.audio.gain,
+                },
+            )
+            save_section(
+                runtime.config_path or CONFIG_FILENAME,
+                "vad",
+                {"threshold": cfg.vad.threshold},
+            )
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"config.toml への書き込みに失敗しました：{exc}"}, status_code=500
+            )
+
+        return {
+            "ok": True,
+            "config": asdict_audio(cfg),
+            "threshold_db": round(rms_to_db(cfg.vad.threshold), 1),
+            "source": runtime.status.source,
+        }
+
+    # ---------------- 記録（改善用） ----------------
+
+    @app.get("/api/record")
+    async def api_record() -> dict:
+        return {
+            "ok": True,
+            "state": runtime.pipeline.recording_state(),
+            "config": {
+                "enabled": runtime.cfg.record.enabled,
+                "dir": runtime.cfg.record.dir,
+                "max_minutes": runtime.cfg.record.max_minutes,
+            },
+        }
+
+    @app.post("/api/record")
+    async def api_set_record(payload: dict) -> dict:
+        enabled = bool(payload.get("enabled"))
+        try:
+            state = await run_in_threadpool(runtime.pipeline.set_recording, enabled)
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"記録を開始できませんでした：{type(exc).__name__}: {exc}"},
+                status_code=500,
+            )
+        try:
+            save_section(
+                runtime.config_path or CONFIG_FILENAME, "record", {"enabled": enabled}
+            )
+        except Exception as exc:
+            # 設定を永続化できなかったのに録音だけ続くのは不親切なので元に戻す
+            try:
+                await run_in_threadpool(runtime.pipeline.set_recording, not enabled)
+            except Exception:
+                pass
+            return JSONResponse(
+                {"error": f"config.toml への書き込みに失敗しました：{exc}"}, status_code=500
+            )
+        return {"ok": True, "state": state}
+
+    @app.post("/api/record/open")
+    async def api_open_record() -> dict:
+        state = runtime.pipeline.recording_state()
+        target = Path(state.get("dir") or ".")
+        try:
+            await run_in_threadpool(open_dir, target)
+        except Exception as exc:
+            return JSONResponse({"error": f"フォルダを開けませんでした：{exc}"}, status_code=500)
+        return {"ok": True, "path": str(target)}
+
     @app.get("/api/glossary")
     async def api_glossary() -> dict:
         glossary = load_glossary(runtime.cfg.glossary.dir)
@@ -142,6 +294,7 @@ def create_app(runtime: Runtime) -> FastAPI:
             "app": APP_NAME,
             "version": __version__,
             "status": runtime.status.to_dict(),
+            "recording": runtime.pipeline.recording_state(),
             "pid": __import__("os").getpid(),
         }
 
@@ -156,7 +309,9 @@ def create_app(runtime: Runtime) -> FastAPI:
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:
         await websocket.accept()
-        queue = runtime.publisher.add_client()
+        # 设置页的电平条用 /ws?levels=1；字幕页用 /ws，不接收 10Hz 的电平消息。
+        allow_levels = websocket.query_params.get("levels") in ("1", "true", "yes")
+        queue = runtime.publisher.add_client(allow_levels=allow_levels)
         try:
             await websocket.send_json(
                 {

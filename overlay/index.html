@@ -155,6 +155,8 @@
   const state = {
     maxLines: 2,
     bilingual: true,
+    holdMs: 5000,       // 最後の字幕を残す時間。0 = 消さない
+    clearTimer: 0,
     connected: false,
     lines: 0,
     lastLatency: null,
@@ -197,6 +199,12 @@
 
     stage.className = cfg.position === "top" ? "top" : "bottom";
     state.maxLines = Math.max(1, Math.min(6, num(cfg.max_lines, 2)));
+    state.holdMs = Math.max(0, Math.min(60000, num(cfg.clear_after_ms, 5000)));
+    // 从「自动消す」に切り替えたら、予約済みのタイマーも止める
+    if (!state.holdMs) {
+      clearTimeout(state.clearTimer);
+      state.clearTimer = 0;
+    }
     state.bilingual = cfg.bilingual !== false;
     document.body.classList.toggle("no-bilingual", !state.bilingual);
     document.body.classList.toggle("debug", DEBUG);
@@ -204,6 +212,29 @@
   }
 
   /* ---------------- 渲染 ---------------- */
+
+  // 沉默时把字幕收掉。时间从「最后一句出现」开始算；新句子会重置计时。
+  // 长句按字数多给一点阅读时间（日语/中文大约 6~8 字/秒），但最多 15 秒。
+  function scheduleClear(chars) {
+    if (PREVIEW) return;  // 预排版页面要保持文字，方便调样式
+    clearTimeout(state.clearTimer);
+    state.clearTimer = 0;
+    if (!state.holdMs) return;
+    const readMs = 1500 + Math.max(0, chars) * 130;
+    const delay = Math.min(15000, Math.max(state.holdMs, readMs));
+    state.clearTimer = setTimeout(fadeOutAll, delay);
+  }
+
+  function fadeOutAll() {
+    state.clearTimer = 0;
+    const visible = stage.querySelectorAll(".line:not(.out)");
+    visible.forEach((el) => {
+      el.classList.add("out");
+      setTimeout(() => el.remove(), 200);
+    });
+    state.lines = 0;
+    updateHud();
+  }
 
   function addLine(payload, options) {
     const opts = options || {};
@@ -254,10 +285,13 @@
       if (!extra) break;
       extra.remove();
     }
+    scheduleClear([...(zh || ja)].length);
     updateHud();
   }
 
   function clearLines() {
+    clearTimeout(state.clearTimer);
+    state.clearTimer = 0;
     stage.innerHTML = "";
     state.lines = 0;
   }

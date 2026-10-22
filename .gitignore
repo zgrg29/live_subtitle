@@ -2,6 +2,7 @@
 config.toml
 runtime.json
 logs/
+recordings/
 models/
 .tmp/
 .testtmp/
