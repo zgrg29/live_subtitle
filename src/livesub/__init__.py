@@ -7,5 +7,5 @@
 - 输出走 OBS 浏览器源，纯 CSS 渲染。
 """
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 APP_NAME = "LiveSub"

@@ -102,8 +102,21 @@ def _diag_summary_text(diag: dict) -> str:
     clients = diag.get("clients") or {}
     channels = diag.get("channels_db") or []
     channel_text = " / ".join(f"ch{i + 1} {db:+.0f} dB" for i, db in enumerate(channels)) or "-"
-    selected = int(diag.get("channel") if diag.get("channel") is not None else 0)
-    channel_label = "全chミックス" if selected < 0 else f"ch{selected + 1}"
+    selected = diag.get("active_channel")
+    mode = str(diag.get("channel_mode") or "manual")
+    if mode == "auto":
+        if diag.get("auto_state") == "locked" and selected is not None:
+            channel_label = f"ch{int(selected) + 1}（自動判定）"
+        elif diag.get("auto_state") == "listening" and selected is not None:
+            channel_label = f"ch{int(selected) + 1}（自動判定中）"
+        else:
+            channel_label = "自動"
+    elif selected is None:
+        channel_label = "-"
+    elif int(selected) < 0:
+        channel_label = "全chミックス"
+    else:
+        channel_label = f"ch{int(selected) + 1}"
     return "\n".join(
         [
             "LiveSub 診断レポート",
@@ -209,6 +222,7 @@ def create_app(runtime: Runtime) -> FastAPI:
             default_name = ""
             error = f"{type(exc).__name__}: {exc}"
         cfg = runtime.cfg
+        diag = runtime.pipeline.diag()
         return {
             "ok": True,
             "config": asdict_audio(cfg),
@@ -216,7 +230,11 @@ def create_app(runtime: Runtime) -> FastAPI:
             "devices": devices,
             "default_device": default_name,
             "source": runtime.status.source,
-            "channel_count": int(runtime.pipeline.diag().get("channel_count", 1)),
+            "channel_count": int(diag.get("channel_count", 1)),
+            "channel_mode": diag.get("channel_mode", "manual"),
+            "auto_state": diag.get("auto_state", "manual"),
+            "active_channel": diag.get("active_channel"),
+            "detected_channel": diag.get("detected_channel"),
             "error": error,
         }
 
@@ -232,7 +250,7 @@ def create_app(runtime: Runtime) -> FastAPI:
             device_index = -1
         device_index = max(-1, device_index)
         channel = (
-            int(_clamp(payload.get("channel"), -1, 7, cfg.audio.channel))
+            int(_clamp(payload.get("channel"), -2, 7, cfg.audio.channel))
             if "channel" in payload
             else cfg.audio.channel
         )
@@ -278,11 +296,17 @@ def create_app(runtime: Runtime) -> FastAPI:
                 {"error": f"config.toml への書き込みに失敗しました：{exc}"}, status_code=500
             )
 
+        diag = runtime.pipeline.diag()
         return {
             "ok": True,
             "config": asdict_audio(cfg),
             "threshold_db": round(rms_to_db(cfg.vad.threshold), 1),
             "source": runtime.status.source,
+            "channel_count": int(diag.get("channel_count", 1)),
+            "channel_mode": diag.get("channel_mode", "manual"),
+            "auto_state": diag.get("auto_state", "manual"),
+            "active_channel": diag.get("active_channel"),
+            "detected_channel": diag.get("detected_channel"),
         }
 
     # ---------------- 記録（改善用） ----------------

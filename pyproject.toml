@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "livesub"
-version = "0.5.0"
+version = "0.5.2"
 description = "OBS 用のローカル・リアルタイム日本語→中国語字幕（マイク入力・完全ローカル・低遅延）"
 readme = "README.md"
 requires-python = ">=3.10"

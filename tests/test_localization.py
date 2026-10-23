@@ -34,7 +34,7 @@ class UserFacingPagesTest(unittest.TestCase):
     def test_admin_page_is_japanese(self) -> None:
         html = _read("overlay/admin.html")
         self.assertIn('lang="ja"', html)
-        for word in ("保存して適用", "スタイル", "辞書", "試し翻訳", "縁取り"):
+        for word in ("今すぐ保存", "スタイル", "辞書", "試し翻訳", "縁取り"):
             self.assertIn(word, html)
         for word in ("保存并应用", "样式", "词典", "描边"):
             self.assertNotIn(word, html)

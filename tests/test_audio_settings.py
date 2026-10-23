@@ -24,7 +24,7 @@ from livesub.asr.mock import ScriptedASR  # noqa: E402
 from livesub.audio.capture import SyntheticSource  # noqa: E402
 from livesub.audio.level import db_to_rms, level_percent, rms_to_db  # noqa: E402
 from livesub.audio.vad import EnergyVAD  # noqa: E402
-from livesub.config import Config, load, save_section, to_toml  # noqa: E402
+from livesub.config import AUTO_CHANNEL, Config, load, save_section, to_toml  # noqa: E402
 from livesub.metrics import Metrics  # noqa: E402
 from livesub.pipeline import Pipeline, PipelineStatus, Publisher  # noqa: E402
 from livesub.record import SessionRecorder  # noqa: E402
@@ -61,7 +61,7 @@ class AudioSettingConfigTest(unittest.TestCase):
         self.assertTrue(cfg.ui.open_admin)
         self.assertFalse(cfg.record.enabled)
         self.assertEqual(cfg.record.max_minutes, 60)
-        self.assertEqual(cfg.audio.channel, 0)
+        self.assertEqual(cfg.audio.channel, AUTO_CHANNEL)
 
     def test_channel_is_clamped(self) -> None:
         from livesub.config import _validate
@@ -73,7 +73,36 @@ class AudioSettingConfigTest(unittest.TestCase):
 
         cfg.audio.channel = -9  # type: ignore[assignment]
         _validate(cfg)
-        self.assertEqual(cfg.audio.channel, -1)
+        self.assertEqual(cfg.audio.channel, AUTO_CHANNEL)
+
+    def test_empty_device_with_stale_index_uses_system_default(self) -> None:
+        """0.5.1 の「システム既定」保存バグ（device="" / index=0）を引き継がない。"""
+        from livesub.config import _validate
+
+        cfg = Config()
+        cfg.audio.device = ""
+        cfg.audio.device_index = 0
+        cfg.audio.channel = 0
+        _validate(cfg)
+        self.assertEqual(cfg.audio.device_index, -1)
+        self.assertEqual(cfg.audio.channel, AUTO_CHANNEL)
+
+        # 明示的に入力2を選んでいた場合は、自動へ書き換えない。
+        cfg.audio.device = ""
+        cfg.audio.device_index = 0
+        cfg.audio.channel = 1
+        _validate(cfg)
+        self.assertEqual(cfg.audio.device_index, -1)
+        self.assertEqual(cfg.audio.channel, 1)
+
+        # Sound Mapper が明示的に保存されていても、実デバイスではないので戻す。
+        cfg.audio.device = "Microsoft Sound Mapper - Input"
+        cfg.audio.device_index = 0
+        cfg.audio.channel = 0
+        _validate(cfg)
+        self.assertEqual(cfg.audio.device, "")
+        self.assertEqual(cfg.audio.device_index, -1)
+        self.assertEqual(cfg.audio.channel, AUTO_CHANNEL)
 
     def test_out_of_range_values_are_clamped(self) -> None:
         cfg = Config()
@@ -94,7 +123,7 @@ class AudioSettingConfigTest(unittest.TestCase):
     def test_generated_config_has_new_sections(self) -> None:
         text = to_toml(Config())
         for needle in ("clear_after_ms = 5000", "[ui]", "[record]", "open_admin = true",
-                       "enabled = false", "マイク", "channel = 0"):
+                       "enabled = false", "マイク", "channel = -2"):
             self.assertIn(needle, text)
 
     def test_save_section_keeps_other_sections(self) -> None:
@@ -321,6 +350,56 @@ class MicChannelSelectionTest(unittest.TestCase):
         self.assertEqual(len(src.channel_levels()), 1)
         src.close()
 
+    def test_auto_selects_the_channel_with_speech(self) -> None:
+        """自動判定：入力2にだけ声があるとき、ch2 を選んで固定する。"""
+        src = self._source(channel=AUTO_CHANNEL)
+        self.assertEqual(src.channel_mode, "auto")
+        self.assertEqual(src.auto_state, "listening")
+
+        # 600ms 相当（20ms × 30）声を入れる。ch1 は無音、ch2 に声。
+        for _ in range(30):
+            self._feed(src, [0.0, 0.5])
+            src.note_speech(True)
+
+        self.assertTrue(src.auto)
+        self.assertEqual(src.auto_state, "locked")
+        self.assertEqual(src.detected_channel, 1)
+        self.assertEqual(src.active_channel, 1)
+        frame = next(src.frames())
+        self.assertAlmostEqual(float(np.max(np.abs(frame))), 0.5, places=3)
+        src.close()
+
+    def test_auto_does_not_lock_without_speech(self) -> None:
+        src = self._source(channel=AUTO_CHANNEL)
+        for _ in range(40):
+            self._feed(src, [0.0, 0.0])
+            src.note_speech(False)
+        self.assertEqual(src.auto_state, "listening")
+        self.assertIsNone(src.detected_channel)
+        src.close()
+
+    def test_auto_can_be_overridden_manually(self) -> None:
+        """自動判定のあとでも、手動で ch1 に戻せる（設定は手動として残る）。"""
+        src = self._source(channel=AUTO_CHANNEL)
+        for _ in range(30):
+            self._feed(src, [0.0, 0.5])
+            src.note_speech(True)
+        self.assertEqual(src.detected_channel, 1)
+
+        src.set_channel(0)
+        self.assertFalse(src.auto)
+        self.assertEqual(src.channel_mode, "manual")
+        self.assertEqual(src.active_channel, 0)
+        self.assertIsNone(src.detected_channel)
+        src.close()
+
+    def test_auto_on_mono_device_is_mono(self) -> None:
+        src = self._source(channel=AUTO_CHANNEL, channels=1)
+        self.assertEqual(src.channel_count, 1)
+        self.assertEqual(src.auto_state, "mono")
+        self.assertEqual(src.active_channel, 0)
+        src.close()
+
 
 class PipelineDiagTest(unittest.TestCase):
     def _pipeline(self, tmp, asr=None):
@@ -545,7 +624,10 @@ class OverlayAutoHideTest(unittest.TestCase):
         html = (ROOT / "overlay" / "admin.html").read_text(encoding="utf-8")
         for needle in ("panel-diag", "diag-test", "diag-bundle", "diag-list",
                        "audio_channel", "channel-field", "meter-channels",
-                       "サポート用ファイルを保存", "入力チャンネル"):
+                       "サポート用ファイルを保存", "入力チャンネル",
+                       "自動（推奨）", "save-audio-top", "自動保存",
+                       "scheduleAudioSave", "scheduleStyleSave", "scheduleGlossarySave",
+                       'rawIndex !== ""'):
             self.assertIn(needle, html)
 
 

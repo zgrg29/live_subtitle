@@ -21,6 +21,8 @@ from typing import Iterator, Protocol
 
 import numpy as np
 
+from ..config import AUTO_CHANNEL
+
 
 class AudioSource(Protocol):
     name: str
@@ -153,11 +155,22 @@ class MicSource:
         self.gain = float(gain)
         self.device = device  # 配置里的原始写法（空 = 系统默认），切换设备时用来回退
         self.device_index = int(device_index)
-        self.channel = int(channel)
+        self.requested_channel = int(channel)
+        self.auto = self.requested_channel == AUTO_CHANNEL
+        self.channel = 0 if self.auto else int(channel)
         self._queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=400)
         self._stop = threading.Event()
         self._last_cb = time.monotonic()
         self.dropped_blocks = 0
+
+        # 自動判定用の状態。音声コールバックと pipeline スレッドの両方から触るので、
+        # 共有する数字は短いロックで守る。重い処理は入れない。
+        self._auto_lock = threading.Lock()
+        self._auto_output: int | None = None
+        self._auto_locked = False
+        self._auto_speech_ms = 0.0
+        self._auto_speech_sum: list[float] = []
+        self._auto_noise: list[float] = []
 
         device_index = resolve_input_device(device, self.device_index)
         info = sd.query_devices(device_index, kind="input")
@@ -167,10 +180,18 @@ class MicSource:
         blocksize = max(1, int(sample_rate * block_ms / 1000))
         # 先按"最多能开几个通道"预分配：回调在 stream.start() 之后可能立刻触发，
         # 那时下面的 channel_count 还没赋值，不能在这里出现 AttributeError。
-        self.channel_rms: list[float] = [0.0] * max(1, min(4, self.max_channels))
+        slots = max(1, min(4, self.max_channels))
+        self.channel_rms: list[float] = [0.0] * slots
+        self._auto_speech_sum = [0.0] * slots
+        self._auto_noise = [0.0015] * slots
         self._stream = self._open_stream(sd, device_index, sample_rate, blocksize)
         self.channel_count = int(getattr(self._stream, "channels", 1) or 1)
         del self.channel_rms[self.channel_count:]
+        del self._auto_speech_sum[self.channel_count:]
+        del self._auto_noise[self.channel_count:]
+        if self.auto and self.channel_count <= 1:
+            # 1ch マイクでは選ぶ余地がない。UI も「自動」を出さない。
+            self.channel = 0
 
     def _open_stream(self, sd, device_index, sample_rate, blocksize):  # noqa: ANN001
         """优先按 2ch 打开（能分通道看电平）；失败就退回单声道。
@@ -178,10 +199,20 @@ class MicSource:
         某些驱动在 16kHz/2ch 组合下会拒绝打开，而 1ch 是能用的，
         所以这里必须能退，不能因为"想看电平"把麦克风弄成打不开。
         """
-        want = min(2, self.max_channels)
-        if self.channel > 0:
+        if self.auto:
+            # 自動判定では、まず候補を全部開いて各チャンネルのレベルを見たい。
+            # 4ch までに制限（それ以上の業務用インターフェースは手動選択で対応）。
+            want = min(4, self.max_channels)
+        elif self.channel > 0:
             want = min(4, self.max_channels, self.channel + 1)
-        attempts = [want] if want <= 1 else [want, 1]
+        else:
+            want = min(2, self.max_channels)
+
+        attempts: list[int] = []
+        candidate_channels = [want, 2, 1] if self.auto else [want, 1]
+        for channels in candidate_channels:
+            if 1 <= channels <= self.max_channels and channels not in attempts:
+                attempts.append(channels)
         last_error: Exception | None = None
         for channels in attempts:
             try:
@@ -213,11 +244,20 @@ class MicSource:
         for i in range(min(len(self.channel_rms), data.shape[1])):
             block_rms = float(np.sqrt(np.mean(np.square(data[:, i], dtype=np.float32))))
             self.channel_rms[i] = 0.85 * self.channel_rms[i] + 0.15 * block_rms
+            # ゆっくりした雑音底。声が乗っている間も少し上がるが、判定には
+            # 「声の平均 / 雑音底」ではなく、まず平均 RMS の大小を使う。
+            self._auto_noise[i] = 0.995 * self._auto_noise[i] + 0.005 * block_rms
 
-        if self.channel < 0:
+        active = self.channel
+        if self.auto and not self._auto_locked:
+            # まだ判定前。声が入っている側をそのまま通す。ここで mix にすると
+            # 入力2の声が半分の音量になり、VAD が拾いにくくなる。
+            active = self._auto_pick_output(data.shape[1])
+
+        if active < 0:
             mono = data.mean(axis=1, dtype=np.float32)
-        elif self.channel < data.shape[1]:
-            mono = data[:, self.channel]
+        elif active < data.shape[1]:
+            mono = data[:, active]
         else:
             mono = data[:, 0]
         chunk = np.array(mono, dtype=np.float32, copy=True)
@@ -227,6 +267,101 @@ class MicSource:
             self._queue.put_nowait(chunk)
         except queue.Full:
             self.dropped_blocks += 1
+
+    def _auto_pick_output(self, channels: int) -> int:
+        """判定前の出力チャンネル。
+
+        一番大きいチャンネルをそのまま使う。切り替えは 1.35 倍以上の差が
+        出たときだけにして、20ms ごとの細かな揺れで音が途切れないようにする。
+        """
+        if channels <= 1:
+            return 0
+        levels = self.channel_rms
+        best = max(range(min(channels, len(levels))), key=levels.__getitem__)
+        current = self._auto_output
+        if current is None or current >= channels:
+            self._auto_output = best
+        elif best != current:
+            if levels[best] > levels[current] * 1.35 or levels[current] < 1e-4:
+                self._auto_output = best
+        return self._auto_output
+
+    def note_speech(self, speech: bool) -> None:
+        """pipeline の VAD 結果を受け取り、十分な発話が溜まったらチャンネルを固定する。
+
+        VAD は「いま出力しているチャンネル」に対して走るので、入力2にマイクが
+        あっても判定前から声を通せる。600ms 相当の発話が溜まった時点で、
+        各チャンネルの平均 RMS が一番大きいものを選ぶ。
+        """
+        if not self.auto or not speech:
+            return
+        with self._auto_lock:
+            if self._auto_locked:
+                return
+            self._auto_speech_ms += float(self.block_ms)
+            for i in range(min(self.channel_count, len(self._auto_speech_sum))):
+                self._auto_speech_sum[i] += float(self.channel_rms[i])
+
+            if self._auto_speech_ms < 600:
+                return
+
+            frames = max(1, int(self._auto_speech_ms / max(1, self.block_ms)))
+            scores = [
+                value / frames for value in self._auto_speech_sum[: self.channel_count]
+            ]
+            if not scores:
+                return
+            best = max(range(len(scores)), key=scores.__getitem__)
+            # -54 dBFS 未満は「声」ではなく雑音とみなして、もう少し待つ。
+            if scores[best] < 0.002:
+                self._auto_speech_ms = 0.0
+                self._auto_speech_sum = [0.0] * len(self._auto_speech_sum)
+                return
+
+            self.channel = best
+            self._auto_output = best
+            self._auto_locked = True
+
+    def set_channel(self, channel: int) -> None:
+        """手動でチャンネルを切り替える。AUTO_CHANNEL を渡すと自動判定に戻る。"""
+        channel = int(channel)
+        with self._auto_lock:
+            self.requested_channel = channel
+            self.auto = channel == AUTO_CHANNEL
+            self._auto_output = None
+            self._auto_locked = False
+            self._auto_speech_ms = 0.0
+            self._auto_speech_sum = [0.0] * max(1, len(self.channel_rms))
+            if self.auto:
+                self.channel = 0
+            else:
+                self.channel = channel
+
+    @property
+    def channel_mode(self) -> str:
+        return "auto" if self.auto else "manual"
+
+    @property
+    def auto_state(self) -> str:
+        if not self.auto:
+            return "manual"
+        if self.channel_count <= 1:
+            return "mono"
+        return "locked" if self._auto_locked else "listening"
+
+    @property
+    def active_channel(self) -> int:
+        """いま実際に ASR へ渡しているチャンネル。自動判定前は動的に変わる。"""
+        if self.auto and not self._auto_locked:
+            return int(self._auto_output if self._auto_output is not None else 0)
+        return int(self.channel)
+
+    @property
+    def detected_channel(self) -> int | None:
+        """自動判定で確定したチャンネル。未確定なら None。"""
+        if self.auto and self._auto_locked:
+            return int(self.channel)
+        return None
 
     def channel_levels(self) -> list[float]:
         """每一路的线性 RMS 快照（回调线程在写，复制一份再返回）。"""

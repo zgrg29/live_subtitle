@@ -14,6 +14,13 @@ from typing import Any
 
 CONFIG_FILENAME = "config.toml"
 
+# `audio.channel` 的特殊值：
+#   -2 = 自動判定（2ch 以上のとき、最初の会話から声が入っている側を選ぶ）
+#   -1 = すべてミックス
+#    0 = 入力1（L）
+#    1 = 入力2（R）
+AUTO_CHANNEL = -2
+
 
 def project_root() -> Path:
     """源码根目录（src 的上一级）。与当前工作目录无关。"""
@@ -66,10 +73,12 @@ class AudioConfig:
     # PortAudio 的设备索引。同名麦克风（两个同型号 USB 麦）只靠名字会选到第一个，
     # 所以设置页会同时保存索引；重启后索引变了会退回按名字匹配。
     device_index: int = -1
-    # 0 起始的输入通道。-1 = 所有通道取平均。
+    # 0 起始的输入通道。-1 = 所有通道取平均，-2 = 自動判定。
     # 2ch 音频接口（MOTU / UR22 / AG03…）常把麦克风插在输入 2，只取 0 号通道
     # 会得到"有电平但没人声"的音频：电平条会动，识别却一直是空字符串。
-    channel: int = 0
+    # 默认自动：先按「声音最大的那一路」出字幕，确认有人说话后再锁定到
+    # 声量/噪声比最好的那一路；用户之后仍可手动选 1 / 2 / 混音。
+    channel: int = AUTO_CHANNEL
     sample_rate: int = 16000  # ASR 模型通常是 16k，最好不要改
     block_ms: int = 20  # 每次读取的音频块长度，20ms 是延迟/开销的平衡点
     gain: float = 1.0
@@ -370,7 +379,28 @@ def _validate(cfg: Config) -> None:
     a = cfg.audio
     a.device = str(a.device or "")
     a.device_index = max(-1, _num(a.device_index, -1, int))
-    a.channel = max(-1, min(7, _num(a.channel, 0, int)))
+    # 0.5.1 の設定画面には「システム既定」を選ぶと device="" / device_index=0 を
+    # 保存してしまうバグがあった。device が空なのに index が入っている状態は
+    # その痕跡なので、既定デバイス（index=-1）に戻す。これを残すと
+    # PortAudio の index 0（Microsoft Sound Mapper）を掴み続ける。
+    stale_default = not a.device and a.device_index >= 0
+    if stale_default:
+        a.device_index = -1
+        # 同じ保存で channel=0 も書き込まれていることが多い。ユーザーが明示的に
+        # 「入力2」を選んだ場合は 1 なので触らない。0 のときだけ自動へ移行する。
+        if a.channel == 0:
+            a.channel = AUTO_CHANNEL
+
+    # Sound Mapper / Primary Sound Capture は実デバイスではなく Windows の
+    # 転送用エンドポイント。明示的に保存されていても、実際の既定マイクへ戻す。
+    low_device = a.device.strip().lower()
+    if "sound mapper" in low_device or "サウンド マッパー" in low_device \
+            or "primary sound capture" in low_device:
+        a.device = ""
+        a.device_index = -1
+        if a.channel == 0:
+            a.channel = AUTO_CHANNEL
+    a.channel = max(AUTO_CHANNEL, min(7, _num(a.channel, AUTO_CHANNEL, int)))
     a.sample_rate = max(8000, min(48000, _num(a.sample_rate, 16000, int)))
     a.block_ms = max(10, min(100, _num(a.block_ms, 20, int)))
     a.gain = max(0.1, min(8.0, _num(a.gain, 1.0, float)))
@@ -469,7 +499,7 @@ _COMMENTS: dict[str, dict[str, str]] = {
     "audio": {
         "device": "空欄＝システム既定のマイク。名前の一部を書けば一致するマイクを使います",
         "device_index": "同じ名前のマイクが複数あるときの識別用。通常は設定ページから選べば自動で入ります",
-        "channel": "入力チャンネル（0始まり）。2chインターフェースでマイクが入力2なら 1、全部まとめるなら -1",
+        "channel": "入力チャンネル。-2=自動判定（既定）、-1=全部ミックス、0=入力1、1=入力2。2chインターフェースでマイクが入力2なら自動のままでOK",
         "gain": "入力ゲイン。マイクが小さいときは 1.5〜2.0 に上げます",
     },
     "vad": {

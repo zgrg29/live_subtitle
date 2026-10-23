@@ -170,7 +170,7 @@
     <button id="tab-diag" data-panel="panel-diag">診断</button>
   </div>
   <div class="spacer"></div>
-  <span class="status" id="top-status"></span>
+  <span class="status" id="top-status">変更は自動保存されます</span>
   <button class="ghost" onclick="window.open('/overlay?preview=1','_blank')">字幕ページを開く</button>
 </header>
 
@@ -249,8 +249,12 @@
       </div>
 
       <div class="field" style="grid-column: 1 / -1">
+        <p class="hint" style="margin-top:0">
+          変更は<strong>自動で保存</strong>され、OBS の字幕にもすぐ反映されます。
+          下のボタンは、いますぐ保存し直したいとき用です。
+        </p>
         <div class="actions">
-          <button class="primary" id="save-style">保存して適用</button>
+          <button class="primary" id="save-style">今すぐ保存</button>
           <button class="ghost" id="reset-style">再読み込み</button>
           <span class="status" id="style-status"></span>
         </div>
@@ -263,7 +267,8 @@
     <div class="card wide">
       <h2>マイク</h2>
       <p class="hint">
-        パソコンに複数のマイクがある場合、ここで選べます。保存すると再起動なしで切り替わります。<br>
+        パソコンに複数のマイクがある場合、ここで選べます。変更は<strong>自動で保存</strong>され、
+        再起動なしで切り替わります。<br>
         小さい声が拾われないときは <b>入力ゲイン</b> を上げるか、<b>認識しきい値</b> を下げてください。
       </p>
 
@@ -272,21 +277,27 @@
           <label>入力デバイス</label>
           <div class="row">
             <select id="audio_device"></select>
+            <button class="ghost small" id="save-audio-top" disabled>今すぐ保存</button>
             <button class="ghost small" id="refresh-audio">再読込</button>
           </div>
           <span class="status" id="audio-source"></span>
         </div>
 
         <div class="field" id="channel-field" style="grid-column: 1 / -1">
-          <label>入力チャンネル（2ch インターフェースでマイクが「入力2」なら 2）</label>
+          <label>入力チャンネル（2ch インターフェース用）</label>
           <div class="row">
             <select id="audio_channel">
-              <option value="0">1（L・既定）</option>
+              <option value="-2">自動（推奨）</option>
+              <option value="0">1（L）</option>
               <option value="1">2（R）</option>
               <option value="-1">すべてミックス</option>
             </select>
-            <span class="hint" style="margin:0">迷ったら「すべてミックス」。下の ch 別レベルで声が入っている方を選べます。</span>
+            <span class="status" id="audio-auto"></span>
           </div>
+          <span class="hint" style="margin:0">
+            「自動」は、最初に話した声が入っている側を選びます。判定後も、この欄から
+            1 / 2 / ミックスへいつでも変更できます。
+          </span>
         </div>
 
         <div class="field">
@@ -327,7 +338,7 @@
       </div>
 
       <div class="actions">
-        <button class="primary" id="save-audio" disabled>保存して適用</button>
+        <button class="primary" id="save-audio" disabled>今すぐ保存</button>
         <button class="ghost" id="reload-audio">再読み込み</button>
         <span class="status" id="audio-status"></span>
       </div>
@@ -454,10 +465,14 @@
     </div>
 
     <div class="toolbar">
-      <button class="primary" id="save-glossary">辞書を保存して即時反映</button>
+      <button class="primary" id="save-glossary">今すぐ保存して反映</button>
       <button class="ghost" id="reload-glossary">変更を破棄して再読み込み</button>
       <span class="status" id="glossary-status"></span>
     </div>
+    <p class="hint" style="margin-top:0">
+      追加・編集・削除は<strong>自動で保存</strong>され、辞書にもすぐ反映されます。
+      上のボタンは、いますぐ保存し直したいとき用です。
+    </p>
     <p class="warn" id="glossary-warn"></p>
   </section>
 </main>
@@ -470,7 +485,16 @@
   const state = {
     cfg: null, phrases: [], terms: [],
     audio: null, devices: [], record: null, channelCount: 1,
+    channelMode: "manual", autoState: "manual", detectedChannel: null, activeChannel: null,
+    audioLoaded: false,
     levelDb: -90, peakDb: -90, peakAt: 0, levelAt: 0, recordBusy: false,
+  };
+
+  // 自動保存のタイマー。画面ごとに独立させ、入力中に他の画面を壊さない。
+  const autoSave = {
+    styleTimer: 0, styleBusy: false, styleDirty: false,
+    audioTimer: 0, audioBusy: false, audioDirty: false,
+    glossaryTimer: 0, glossaryBusy: false, glossaryDirty: false,
   };
 
   async function api(url, opts) {
@@ -484,6 +508,15 @@
   function setStatus(el, text, ok) {
     el.textContent = text;
     el.className = "status" + (ok === true ? " ok" : ok === false ? " err" : "");
+  }
+
+  // 入力中の「保存しました」がチラつかないよう、少しだけ残してから消す。
+  function flashStatus(el, text, ok) {
+    setStatus(el, text, ok);
+    clearTimeout(el._flashTimer);
+    el._flashTimer = setTimeout(() => {
+      if (el.textContent === text) setStatus(el, "", undefined);
+    }, 2200);
   }
 
   /* ---------------- タブ ---------------- */
@@ -581,7 +614,7 @@
     frame.contentWindow.postMessage({ type: "preview-config", config: collect() }, location.origin);
   }
 
-  // 入力が変わるたびにプレビューへ反映
+  // 入力が変わるたびにプレビューへ反映し、少し待ってから自動保存する。
   document.querySelectorAll("#panel-style input, #panel-style select").forEach((el) => {
     el.addEventListener("input", () => {
       ["zh_size", "ja_size", "outline_width", "margin_percent", "max_lines"].forEach((k) => {
@@ -592,6 +625,7 @@
       $("clear_after_ms_o").textContent = +$("clear_after_ms").value
         ? $("clear_after_ms").value + "秒" : "消さない";
       pushPreview();
+      scheduleStyleSave();
     });
   });
 
@@ -606,7 +640,22 @@
     }
   }
 
-  $("save-style").onclick = async () => {
+  function scheduleStyleSave() {
+    if (!state.cfg) return;
+    autoSave.styleDirty = true;
+    clearTimeout(autoSave.styleTimer);
+    autoSave.styleTimer = setTimeout(() => saveStyle(false), 450);
+  }
+
+  async function saveStyle(manual) {
+    if (!state.cfg) return;
+    clearTimeout(autoSave.styleTimer);
+    if (autoSave.styleBusy) {
+      autoSave.styleDirty = true;
+      return;
+    }
+    autoSave.styleBusy = true;
+    autoSave.styleDirty = false;
     const btn = $("save-style");
     btn.disabled = true;
     try {
@@ -615,24 +664,38 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(collect()),
       });
-      fill(res.config);
+      state.cfg = res.config;
       pushPreview();
-      setStatus($("style-status"), "保存しました。OBS の字幕にすぐ反映されます", true);
+      flashStatus($("style-status"), manual
+        ? "保存しました。OBS の字幕にすぐ反映されます"
+        : "自動保存しました。OBS の字幕に反映済みです", true);
     } catch (e) {
       setStatus($("style-status"), "保存に失敗しました：" + e.message, false);
     } finally {
+      autoSave.styleBusy = false;
       btn.disabled = false;
+      if (autoSave.styleDirty) scheduleStyleSave();
     }
-  };
+  }
 
-  $("reset-style").onclick = () => loadConfig();
+  $("save-style").onclick = () => saveStyle(true);
+
+  $("reset-style").onclick = () => {
+    clearTimeout(autoSave.styleTimer);
+    autoSave.styleDirty = false;
+    loadConfig();
+  };
 
   /* ---------------- 辞書 ---------------- */
   function rowInput(value, placeholder, onInput, width) {
     const input = document.createElement("input");
     input.value = value || "";
     input.placeholder = placeholder || "";
-    input.addEventListener("input", () => onInput(input.value));
+    input.addEventListener("input", () => {
+      onInput(input.value);
+      scheduleGlossarySave();
+    });
+    input.addEventListener("blur", () => scheduleGlossarySave(250));
     if (width) input.style.width = width;
     return input;
   }
@@ -653,7 +716,7 @@
       const del = document.createElement("button");
       del.textContent = "×";
       del.title = "この行を削除";
-      del.onclick = () => { state.phrases.splice(i, 1); renderPhrases(); };
+      del.onclick = () => { state.phrases.splice(i, 1); renderPhrases(); scheduleGlossarySave(150); };
       td4.appendChild(del);
       tr.append(td1, td2, td3, td4);
       body.appendChild(tr);
@@ -679,7 +742,7 @@
         if ((row.mode || "pre") === v) o.selected = true;
         sel.appendChild(o);
       });
-      sel.onchange = () => (row.mode = sel.value);
+      sel.onchange = () => { row.mode = sel.value; scheduleGlossarySave(150); };
       tdMode.appendChild(sel);
 
       const tdWrong = document.createElement("td");
@@ -693,7 +756,7 @@
       const del = document.createElement("button");
       del.textContent = "×";
       del.title = "この行を削除";
-      del.onclick = () => { state.terms.splice(i, 1); renderTerms(); };
+      del.onclick = () => { state.terms.splice(i, 1); renderTerms(); scheduleGlossarySave(150); };
       tdDel.appendChild(del);
 
       tr.append(tdJa, tdZh, tdMode, tdWrong, tdNote, tdDel);
@@ -703,6 +766,8 @@
   }
 
   async function loadGlossary() {
+    clearTimeout(autoSave.glossaryTimer);
+    autoSave.glossaryDirty = false;
     try {
       const data = await api("/api/glossary");
       state.phrases = data.phrases || [];
@@ -720,15 +785,30 @@
     renderPhrases();
     const first = $("phrases-body").querySelector("input");
     if (first) first.focus();
+    scheduleGlossarySave(400);
   };
   $("add-term").onclick = () => {
     state.terms.unshift({ ja: "", zh: "", mode: "pre", wrong: "", note: "" });
     renderTerms();
     const first = $("terms-body").querySelector("input");
     if (first) first.focus();
+    scheduleGlossarySave(400);
   };
 
-  $("save-glossary").onclick = async () => {
+  function scheduleGlossarySave(delay) {
+    autoSave.glossaryDirty = true;
+    clearTimeout(autoSave.glossaryTimer);
+    autoSave.glossaryTimer = setTimeout(() => saveGlossary(false), delay ?? 900);
+  }
+
+  async function saveGlossary(manual) {
+    clearTimeout(autoSave.glossaryTimer);
+    if (autoSave.glossaryBusy) {
+      autoSave.glossaryDirty = true;
+      return;
+    }
+    autoSave.glossaryBusy = true;
+    autoSave.glossaryDirty = false;
     const btn = $("save-glossary");
     btn.disabled = true;
     try {
@@ -737,19 +817,33 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phrases: state.phrases, terms: state.terms }),
       });
-      state.phrases = res.phrases || [];
-      state.terms = res.terms || [];
-      renderPhrases(); renderTerms();
-      setStatus($("glossary-status"), "保存して即時反映しました（" + state.phrases.length + " 文 / " + state.terms.length + " 語）", true);
+      // 自動保存では画面を作り直さない（入力中のフォーカスとカーソルを守る）。
+      // 手動保存のときだけ、サーバーが正規化した内容を画面へ返す。
+      if (manual) {
+        state.phrases = res.phrases || [];
+        state.terms = res.terms || [];
+        renderPhrases(); renderTerms();
+      }
+      flashStatus($("glossary-status"), manual
+        ? "保存して即時反映しました（" + state.phrases.length + " 文 / " + state.terms.length + " 語）"
+        : "自動保存して即時反映しました", true);
       $("glossary-warn").textContent = "書き込み先：" + (res.written || []).join("、");
     } catch (e) {
       setStatus($("glossary-status"), "保存に失敗しました：" + e.message, false);
     } finally {
+      autoSave.glossaryBusy = false;
       btn.disabled = false;
+      if (autoSave.glossaryDirty) scheduleGlossarySave(300);
     }
-  };
+  }
 
-  $("reload-glossary").onclick = () => loadGlossary();
+  $("save-glossary").onclick = () => saveGlossary(true);
+
+  $("reload-glossary").onclick = () => {
+    clearTimeout(autoSave.glossaryTimer);
+    autoSave.glossaryDirty = false;
+    loadGlossary();
+  };
 
   $("try-btn").onclick = async () => {
     const ja = $("try-in").value.trim();
@@ -825,19 +919,73 @@
 
     // 2ch 以上のデバイスのときだけチャンネル選択を目立たせる（1ch マイクには無関係）
     state.channelCount = Math.max(1, Number(data.channel_count) || 1);
+    renderChannelOptions(state.channelCount);
     $("channel-field").style.display = state.channelCount > 1 ? "" : "none";
+  }
+
+  function renderChannelOptions(count) {
+    const sel = $("audio_channel");
+    const current = sel.value;
+    sel.innerHTML = "";
+    sel.add(new Option("自動（推奨）", "-2"));
+    for (let i = 0; i < count; i++) {
+      const suffix = i === 0 ? "（L）" : i === 1 ? "（R）" : "";
+      sel.add(new Option((i + 1) + suffix, String(i)));
+    }
+    sel.add(new Option("すべてミックス", "-1"));
+    // できるだけ今の選択を保つ。無ければ「自動」。
+    sel.value = Array.from(sel.options).some((o) => o.value === current) ? current : "-2";
+  }
+
+  function updateAutoStatus(data) {
+    const source = data || {};
+    state.channelMode = source.channel_mode || state.channelMode || "manual";
+    state.autoState = source.auto_state || state.autoState || "manual";
+    if (source.detected_channel !== undefined) state.detectedChannel = source.detected_channel;
+    if (source.active_channel !== undefined) state.activeChannel = source.active_channel;
+
+    const el = $("audio-auto");
+    if (state.channelCount <= 1) {
+      el.textContent = "1ch マイク";
+      el.className = "status";
+      return;
+    }
+    if (state.channelMode === "auto") {
+      if (state.autoState === "locked" && state.detectedChannel !== null) {
+        el.textContent = "自動判定: ch" + (Number(state.detectedChannel) + 1) + " を使用中";
+        el.className = "status ok";
+      } else {
+        el.textContent = "自動判定中: 何か話してください";
+        el.className = "status";
+      }
+      return;
+    }
+    const ch = Number(state.audio && state.audio.channel);
+    if (ch === -1) {
+      el.textContent = "手動: すべてミックス";
+    } else if (Number.isFinite(ch) && ch >= 0) {
+      el.textContent = "手動: ch" + (ch + 1);
+    } else {
+      el.textContent = "";
+    }
+    el.className = "status";
   }
 
   function applyAudioConfig(data) {
     state.audio = data.config || {};
     $("audio_gain").value = String(state.audio.gain ?? 1);
     $("audio_threshold").value = String(Math.round(data.threshold_db ?? -42));
-    $("audio_channel").value = String(state.audio.channel ?? 0);
+    $("audio_channel").value = String(state.audio.channel ?? -2);
     refreshAudioOutputs();
     let text = "動作中のデバイス：" + (data.source || "-");
     if (data.error) text += "　（デバイス一覧を取得できませんでした）";
+    const mapper = /Sound Mapper|サウンド マッパー|Primary Sound Capture/i.test(data.source || "");
+    if (mapper) text += "　→ 実際のマイク名を選んでください";
     $("audio-source").textContent = text;
+    $("audio-source").className = "status" + (mapper ? " err" : "");
     $("save-audio").disabled = false;
+    $("save-audio-top").disabled = false;
+    updateAutoStatus(data);
   }
 
   async function loadAudio() {
@@ -845,24 +993,50 @@
       const data = await api("/api/audio");
       renderDevices(data);
       applyAudioConfig(data);
+      state.audioLoaded = true;
       setStatus($("audio-status"), "");
     } catch (e) {
       setStatus($("audio-status"), "音声設定の読み込みに失敗しました：" + e.message, false);
     }
   }
 
-  $("refresh-audio").onclick = () => loadAudio();
-  $("reload-audio").onclick = () => loadAudio();
-  $("audio_gain").addEventListener("input", refreshAudioOutputs);
-  $("audio_threshold").addEventListener("input", refreshAudioOutputs);
+  $("refresh-audio").onclick = () => {
+    clearTimeout(autoSave.audioTimer);
+    autoSave.audioDirty = false;
+    loadAudio();
+  };
+  $("reload-audio").onclick = () => {
+    clearTimeout(autoSave.audioTimer);
+    autoSave.audioDirty = false;
+    loadAudio();
+  };
 
-  $("save-audio").onclick = async () => {
+  function scheduleAudioSave(delay) {
+    if (!state.audioLoaded) return;
+    autoSave.audioDirty = true;
+    clearTimeout(autoSave.audioTimer);
+    autoSave.audioTimer = setTimeout(() => saveAudio(false), delay ?? 120);
+  }
+
+  async function saveAudio(manual) {
+    clearTimeout(autoSave.audioTimer);
+    if (autoSave.audioBusy) {
+      autoSave.audioDirty = true;
+      return;
+    }
+    autoSave.audioBusy = true;
+    autoSave.audioDirty = false;
     const btn = $("save-audio");
+    const top = $("save-audio-top");
     btn.disabled = true;
+    top.disabled = true;
+    const selected = $("audio_device").selectedOptions[0];
+    // 先頭の「システム既定」は value=""。ここを +"" = 0 として扱うと、
+    // 既定デバイスではなく PortAudio の index 0（Microsoft Sound Mapper）を
+    // 選んでしまう。空文字は必ず -1（＝システム既定）に戻す。
+    const rawIndex = selected ? selected.value : "";
+    const deviceIndex = rawIndex !== "" && Number.isFinite(+rawIndex) ? +rawIndex : -1;
     try {
-      const selected = $("audio_device").selectedOptions[0];
-      const picked = selected ? +selected.value : NaN;
-      const deviceIndex = Number.isFinite(picked) ? picked : -1;
       const res = await api("/api/audio", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -874,14 +1048,46 @@
           threshold_db: +$("audio_threshold").value,
         }),
       });
-      await loadAudio();
-      setStatus($("audio-status"), "保存しました。動作中：" + (res.source || "-"), true);
+      state.audio = res.config || state.audio;
+      state.channelCount = Math.max(1, Number(res.channel_count) || state.channelCount);
+      // 保存中にユーザーが次のデバイス／チャンネルを選んでいたら、
+      // 古い応答でその選択を巻き戻さない。次の自動保存に任せる。
+      if (!autoSave.audioDirty) {
+        renderChannelOptions(state.channelCount);
+        $("audio_channel").value = String(state.audio.channel ?? -2);
+      }
+      $("channel-field").style.display = state.channelCount > 1 ? "" : "none";
+      const mapper = /Sound Mapper|サウンド マッパー|Primary Sound Capture/i.test(res.source || "");
+      $("audio-source").textContent = "動作中のデバイス：" + (res.source || "-")
+        + (mapper ? "　→ 実際のマイク名を選んでください" : "");
+      $("audio-source").className = "status" + (mapper ? " err" : "");
+      updateAutoStatus(res);
+      flashStatus($("audio-status"), manual
+        ? "保存しました。動作中：" + (res.source || "-")
+        : "自動保存しました。動作中：" + (res.source || "-"), true);
     } catch (e) {
       setStatus($("audio-status"), "保存に失敗しました：" + e.message, false);
     } finally {
+      autoSave.audioBusy = false;
       btn.disabled = false;
+      top.disabled = false;
+      if (autoSave.audioDirty) scheduleAudioSave(180);
     }
-  };
+  }
+
+  $("audio_device").addEventListener("change", () => scheduleAudioSave(80));
+  $("audio_channel").addEventListener("change", () => scheduleAudioSave(80));
+  $("audio_gain").addEventListener("input", () => {
+    refreshAudioOutputs();
+    scheduleAudioSave(650);
+  });
+  $("audio_threshold").addEventListener("input", () => {
+    refreshAudioOutputs();
+    scheduleAudioSave(650);
+  });
+
+  $("save-audio").onclick = () => saveAudio(true);
+  $("save-audio-top").onclick = () => saveAudio(true);
 
   // WebSocket の level メッセージ（10 回/秒）でレベルメーターを動かす。
   // 字幕ページと同じ /ws を使う。type が level 以外のメッセージは無視。
@@ -906,6 +1112,11 @@
       st.textContent = "待機中";
       st.className = "status";
     }
+    state.channelMode = msg.channel_mode || state.channelMode;
+    state.autoState = msg.auto_state || state.autoState;
+    if (msg.detected_channel !== undefined) state.detectedChannel = msg.detected_channel;
+    if (msg.active_channel !== undefined) state.activeChannel = msg.active_channel;
+    updateAutoStatus();
     renderChannels(msg);
   }
 
@@ -915,12 +1126,16 @@
     const el = $("meter-channels");
     const list = Array.isArray(msg.channels_db) ? msg.channels_db : [];
     if (list.length < 2) { el.textContent = ""; return; }
-    const current = state.audio ? Number(state.audio.channel) : -1;
+    const auto = msg.channel_mode === "auto" || state.channelMode === "auto";
+    const current = auto
+      ? (msg.active_channel !== undefined ? Number(msg.active_channel) : state.activeChannel)
+      : (state.audio ? Number(state.audio.channel) : -1);
+    const using = auto ? "（自動）" : "（使用中）";
     el.innerHTML = list.map((value, i) => {
       const text = "ch" + (i + 1) + " " + (value <= -89 ? "-∞" : Math.round(value)) + " dB";
       const hot = value > -50 ? ' class="hot"' : "";
-      const using = i === current ? "（使用中）" : "";
-      return "<span" + hot + ">" + text + using + "</span>";
+      const mark = i === current ? using : "";
+      return "<span" + hot + ">" + text + mark + "</span>";
     }).join("");
   }
 
@@ -1094,13 +1309,25 @@
     $("diag-out").textContent = data.summary || "—";
 
     const s = data.system || {};
+    let channel = "-";
+    if (d.channel_mode === "auto") {
+      channel = d.auto_state === "mono"
+        ? "1ch"
+        : d.auto_state === "locked" && d.detected_channel !== null
+          ? "自動 → ch" + (Number(d.detected_channel) + 1)
+          : "自動（判定中）";
+    } else if (Number(d.channel) < 0) {
+      channel = "すべてミックス";
+    } else if (d.channel !== null && d.channel !== undefined) {
+      channel = "ch" + (Number(d.channel) + 1);
+    }
     $("diag-env").textContent = [
       "LiveSub " + (d.version || "?"),
       "OS: " + (s.platform || "-"),
       "Python: " + (s.python || "-") + (s.frozen ? "（exe）" : "（ソース）"),
       "認識: " + (d.asr || "-"),
       "翻訳: " + (d.mt || "-"),
-      "マイク: " + (d.source || "-") + " ／ ch" + (Number(d.channel ?? 0) + 1) + " of " + (d.channel_count || 1),
+      "マイク: " + (d.source || "-") + " ／ " + channel + " of " + (d.channel_count || 1) + "ch",
       "",
       JSON.stringify(data.config || {}, null, 2),
     ].join("\n");

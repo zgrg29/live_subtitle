@@ -253,6 +253,13 @@ class Pipeline:
         self._cfg.audio.channel = int(channel)
         with self._source_lock:
             source = self._source
+        setter = getattr(source, "set_channel", None)
+        if callable(setter):
+            try:
+                setter(int(channel))
+                return
+            except Exception:
+                pass
         if hasattr(source, "channel"):
             try:
                 source.channel = int(channel)
@@ -429,6 +436,12 @@ class Pipeline:
                     break
                 self._push_recent(frame)
                 speech = vad.is_speech(frame)
+                note_speech = getattr(source, "note_speech", None)
+                if callable(note_speech):
+                    try:
+                        note_speech(speech)
+                    except Exception:
+                        pass
                 self._note_frame(speech)
                 self._publish_level(vad, speech)
                 utterance = seg.feed(frame, speech)
@@ -576,8 +589,9 @@ class Pipeline:
         rms = float(vad.last_rms)
         # 分通道电平（加增益之前）：2ch 接口上"声音在哪一路"一眼就能看出来。
         # 字幕页收不到 level，所以多这几个字段不影响 OBS。
+        src = self._source
         channels_db: list[float] = []
-        levels_fn = getattr(self._source, "channel_levels", None)
+        levels_fn = getattr(src, "channel_levels", None)
         if callable(levels_fn):
             try:
                 channels_db = [round(rms_to_db(v), 1) for v in levels_fn()]
@@ -592,6 +606,10 @@ class Pipeline:
                 "speech": bool(speech),
                 "channels": len(channels_db),
                 "channels_db": channels_db,
+                "channel_mode": getattr(src, "channel_mode", "manual"),
+                "auto_state": getattr(src, "auto_state", "manual"),
+                "detected_channel": getattr(src, "detected_channel", None),
+                "active_channel": getattr(src, "active_channel", None),
             }
         )
 
@@ -675,6 +693,11 @@ class Pipeline:
             "device": self._cfg.audio.device,
             "device_index": self._cfg.audio.device_index,
             "channel": getattr(src, "channel", self._cfg.audio.channel),
+            "requested_channel": getattr(src, "requested_channel", self._cfg.audio.channel),
+            "active_channel": getattr(src, "active_channel", None),
+            "detected_channel": getattr(src, "detected_channel", None),
+            "channel_mode": getattr(src, "channel_mode", "manual"),
+            "auto_state": getattr(src, "auto_state", "manual"),
             "channel_count": int(getattr(src, "channel_count", 1) or 1),
             "channels_db": channels_db,
             "sample_rate": rate,
